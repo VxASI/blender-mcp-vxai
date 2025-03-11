@@ -1,0 +1,2 @@
+# blender-mcp-vxai
+ 
