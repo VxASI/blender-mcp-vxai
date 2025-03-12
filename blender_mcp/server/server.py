@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Blender MCP Server - A Model Context Protocol server for Blender 3D
-This server enables AI assistants to interact with Blender through text commands
+This server enables AI assistants (e.g., Cursor) to interact with Blender through text commands
+via stdio transport, while connecting to the Blender addon via sockets.
 """
 
 import asyncio
@@ -61,12 +62,6 @@ class BlenderConnection:
     def connect(self, attempts: int = RECONNECT_ATTEMPTS) -> bool:
         """
         Connect to the Blender addon socket server
-        
-        Args:
-            attempts: Number of connection attempts to make
-            
-        Returns:
-            bool: True if connection succeeded, False otherwise
         """
         if self.sock and self._check_connection():
             return True
@@ -111,9 +106,6 @@ class BlenderConnection:
     def _check_connection(self) -> bool:
         """
         Check if the current connection is still alive
-        
-        Returns:
-            bool: True if connection is alive, False otherwise
         """
         if not self.sock:
             return False
@@ -158,13 +150,6 @@ class BlenderConnection:
     def receive_data(self, sock: socket.socket, buffer_size: int = 8192) -> bytes:
         """
         Receive complete JSON response from socket
-        
-        Args:
-            sock: Socket to receive from
-            buffer_size: Size of receive buffer
-            
-        Returns:
-            bytes: Complete response data
         """
         chunks = []
         start_time = time.time()
@@ -215,21 +200,9 @@ class BlenderConnection:
     def send_command(self, command_type: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Send a command to Blender and return the response
-        
-        Args:
-            command_type: Type of command to send
-            params: Parameters for the command
-            
-        Returns:
-            Dict: Response from Blender
-            
-        Raises:
-            ConnectionError: If not connected to Blender
-            TimeoutError: If timeout occurs waiting for response
-            ValueError: If invalid response received
         """
         if not self.sock and not self.connect():
-            raise ConnectionError("Not connected to Blender")
+            raise ConnectionError("Not connected to Blender. Is the addon running?")
         
         self._last_command_time = time.time()
         
@@ -283,13 +256,6 @@ _blender_connection = None
 def get_blender_connection(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> BlenderConnection:
     """
     Get or create a persistent Blender connection
-    
-    Args:
-        host: Blender host address
-        port: Blender port
-        
-    Returns:
-        BlenderConnection: Connection to Blender
     """
     global _blender_connection
     
@@ -306,26 +272,17 @@ def get_blender_connection(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -
 async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
     """
     Manage server startup and shutdown lifecycle
-    
-    Args:
-        server: FastMCP server instance
-        
-    Yields:
-        Dict: Empty context dictionary
     """
     try:
         logger.info("BlenderMCP server starting up")
-        
         try:
             connection = get_blender_connection()
             version_info = connection.send_command("get_version_info")
             logger.info(f"Connected to Blender {version_info.get('version', 'unknown')}")
         except Exception as e:
-            logger.warning(f"Could not connect to Blender: {str(e)}")
-            logger.warning("Make sure the Blender addon is running!")
-        
+            logger.error(f"Blender connection failed: {str(e)}")
+            raise  # Fail if Blender connection is not established
         yield {}
-        
     finally:
         global _blender_connection
         if _blender_connection:
@@ -910,13 +867,15 @@ def create_animation() -> str:
     return """Create a cube that moves from position [0,0,0] to [5,0,0] over 30 frames"""
 
 def main():
-    """Run the BlenderMCP server"""
+    """Run the BlenderMCP server with stdio transport for Cursor"""
     try:
-        mcp.run()
+        logger.info("Starting BlenderMCP server for Cursor integration...")
+        mcp.run()  # Use stdio transport
     except KeyboardInterrupt:
         logger.info("Server shutdown requested")
     except Exception as e:
         logger.error(f"Error starting server: {str(e)}")
+        raise
 
 if __name__ == "__main__":
     main()
