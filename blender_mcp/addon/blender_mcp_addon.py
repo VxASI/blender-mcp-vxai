@@ -1,432 +1,399 @@
-# Blender MCP Addon - Socket server for MCP integration
+import bpy
+import json
+import logging
+import socket
+from bpy.props import StringProperty, IntProperty, BoolProperty
+
 bl_info = {
-    "name": "Blender MCP Addon",
-    "author": "Your Name",
-    "version": (1, 0, 0),
+    "name": "Blender MCP",
+    "author": "BlenderMCP",
+    "version": (0, 1),
     "blender": (3, 0, 0),
-    "location": "View3D > Sidebar > MCP Tab",
-    "description": "Socket server for Model Context Protocol integration with MCP server",
-    "category": "System",
+    "location": "View3D > Sidebar > BlenderMCP",
+    "description": "Connect Blender to external tools via MCP",
+    "category": "Interface",
 }
 
-import bpy
-import socket
-import json
-import threading
-import logging
-import base64
-import os
-import tempfile
-from bpy.types import Operator, Panel
-from bpy.props import BoolProperty, IntProperty, StringProperty
-
-# Configure logging
-log_file = os.path.join(tempfile.gettempdir(), "blender_mcp_addon.log")
+# Configure logging with file output
+LOG_DIR = "/tmp"  # Adjust as needed for your system
+if not os.path.exists(LOG_DIR):
+    os.makedirs(LOG_DIR)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join(LOG_DIR, "blender_mcp_addon.log")),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger("BlenderMCPAddon")
-logger.setLevel(logging.INFO)
 
-# Create formatter
-formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-
-# Console handler
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
-
-# File handler (with error handling)
-try:
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-    logger.info(f"Logging to file: {log_file}")
-except Exception as e:
-    logger.warning(f"Failed to set up file logging: {str(e)}. Falling back to console logging.")
-
-# Server configuration
-DEFAULT_HOST = "localhost"
-DEFAULT_PORT = 9876
-BUFFER_SIZE = 8192
-
-# Module-level server instance
-_server = None
-
-class MCP_Server:
-    """Socket server running inside Blender to handle MCP commands"""
-    def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT):
+class BlenderMCPServer:
+    def __init__(self, host='localhost', port=9876):
         self.host = host
         self.port = port
-        self.server_socket = None
         self.running = False
-        self.thread = None
+        self.server_socket = None
+        self.client_socket = None
+        self.buffer = b''
 
     def start(self):
-        """Start the socket server in a separate thread"""
-        global _server
         if self.running:
             logger.info("Server already running")
             return
-        
         try:
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            logger.info(f"Attempting to bind to {self.host}:{self.port}")
             self.server_socket.bind((self.host, self.port))
             self.server_socket.listen(1)
+            self.server_socket.setblocking(False)
             self.running = True
-            
-            logger.info(f"Starting MCP server at {self.host}:{self.port}")
-            self.thread = threading.Thread(target=self._run, daemon=True)
-            self.thread.start()
-        except Exception as e:
-            logger.error(f"Failed to start server: {str(e)}")
+            bpy.app.timers.register(self._process_server, persistent=True)
+            logger.info(f"MCP server started on {self.host}:{self.port}")
+        except socket.error as e:
+            logger.error(f"Failed to start server: {str(e)}", exc_info=True)
             self.running = False
+            if self.server_socket:
+                self.server_socket.close()
+                self.server_socket = None
+            raise Exception(f"Failed to bind to {self.host}:{self.port}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error starting server: {str(e)}", exc_info=True)
+            self.running = False
+            if self.server_socket:
+                self.server_socket.close()
+                self.server_socket = None
+            raise Exception(f"Unexpected error: {str(e)}")
 
     def stop(self):
-        """Stop the socket server"""
         if not self.running:
+            logger.info("Server not running")
             return
-        
         self.running = False
+        if bpy.app.timers.is_registered(self._process_server):
+            bpy.app.timers.unregister(self._process_server)
         if self.server_socket:
-            try:
-                self.server_socket.close()
-            except Exception as e:
-                logger.error(f"Error closing server socket: {str(e)}")
-        if self.thread:
-            self.thread.join(timeout=2.0)
+            self.server_socket.close()
+        if self.client_socket:
+            self.client_socket.close()
+        self.server_socket = None
+        self.client_socket = None
+        self.buffer = b''
         logger.info("MCP server stopped")
 
-    def _run(self):
-        """Main server loop to accept and handle client connections"""
-        while self.running:
-            try:
-                client_socket, addr = self.server_socket.accept()
-                logger.info(f"Connection from {addr}")
-                threading.Thread(target=self._handle_client, args=(client_socket,), daemon=True).start()
-            except Exception as e:
-                if self.running:  # Only log if not shutting down intentionally
-                    logger.error(f"Server error: {str(e)}")
-
-    def _handle_client(self, client_socket):
-        """Handle individual client connection"""
+    def _process_server(self):
+        if not self.running:
+            return None
         try:
-            while self.running:
-                data = client_socket.recv(BUFFER_SIZE)
-                if not data:
-                    break
-                
+            if not self.client_socket and self.server_socket:
                 try:
-                    command = json.loads(data.decode('utf-8'))
-                    response = self._process_command(command)
-                    client_socket.sendall(json.dumps(response).encode('utf-8'))
-                except json.JSONDecodeError as e:
-                    logger.error(f"Invalid JSON received: {str(e)}")
-                    client_socket.sendall(json.dumps({"status": "error", "message": "Invalid JSON"}).encode('utf-8'))
+                    self.client_socket, addr = self.server_socket.accept()
+                    self.client_socket.setblocking(False)
+                    logger.info(f"Connected to client: {addr}")
+                except BlockingIOError:
+                    pass
+            if self.client_socket:
+                try:
+                    data = self.client_socket.recv(8192)
+                    if data:
+                        self.buffer += data
+                        try:
+                            command = json.loads(self.buffer.decode('utf-8'))
+                            self.buffer = b''
+                            response = self._process_command(command)
+                            self.client_socket.sendall(json.dumps(response).encode('utf-8'))
+                        except json.JSONDecodeError:
+                            pass
+                    else:
+                        logger.info("Client disconnected")
+                        self.client_socket.close()
+                        self.client_socket = None
+                        self.buffer = b''
+                except BlockingIOError:
+                    pass
                 except Exception as e:
-                    logger.error(f"Error processing command: {str(e)}")
-                    client_socket.sendall(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+                    logger.error(f"Error with client: {str(e)}")
+                    if self.client_socket:
+                        self.client_socket.close()
+                        self.client_socket = None
+                    self.buffer = b''
         except Exception as e:
-            logger.error(f"Client handling error: {str(e)}")
-        finally:
-            client_socket.close()
+            logger.error(f"Server error: {str(e)}")
+        return 0.1
 
-    def _process_command(self, command: dict) -> dict:
-        """Process incoming MCP commands and return response"""
+    def _process_command(self, command):
         cmd_type = command.get("type")
         params = command.get("params", {})
-        
-        try:
-            if cmd_type == "ping":
-                return {"status": "success", "result": {"pong": True}}
-            
-            elif cmd_type == "get_version_info":
-                return {"status": "success", "result": {"version": bpy.app.version_string}}
-            
-            elif cmd_type == "get_scene_info":
-                scene = bpy.context.scene
-                return {
-                    "status": "success",
-                    "result": {
-                        "name": scene.name,
-                        "frame_start": scene.frame_start,
-                        "frame_end": scene.frame_end,
-                        "objects": len(scene.objects),
-                    }
-                }
-            
-            elif cmd_type == "get_object_list":
-                return {
-                    "status": "success",
-                    "result": [{"name": obj.name, "type": obj.type} for obj in bpy.data.objects]
-                }
-            
-            elif cmd_type == "get_material_list":
-                return {
-                    "status": "success",
-                    "result": [{"name": mat.name} for mat in bpy.data.materials]
-                }
-            
-            elif cmd_type == "render_preview":
-                scene = bpy.context.scene
-                original_filepath = scene.render.filepath
-                scene.render.image_settings.file_format = 'PNG'
-                scene.render.filepath = os.path.join(tempfile.gettempdir(), "mcp_preview.png")
-                
-                bpy.ops.render.render(write_still=True)
-                with open(scene.render.filepath, "rb") as f:
-                    image_data = base64.b64encode(f.read()).decode('utf-8')
-                
-                scene.render.filepath = original_filepath
-                try:
-                    os.remove(scene.render.filepath)
-                except Exception as e:
-                    logger.warning(f"Failed to delete preview file: {str(e)}")
-                
-                return {"status": "success", "result": {"image_data": image_data}}
-            
-            elif cmd_type == "get_object_info":
-                obj_name = params.get("name")
-                obj = bpy.data.objects.get(obj_name)
-                if not obj:
-                    return {"status": "error", "message": f"Object '{obj_name}' not found"}
-                return {
-                    "status": "success",
-                    "result": {
-                        "name": obj.name,
-                        "type": obj.type,
-                        "location": list(obj.location),
-                        "rotation": list(obj.rotation_euler),
-                        "scale": list(obj.scale),
-                    }
-                }
-            
-            elif cmd_type == "create_object":
-                type_map = {
-                    "CUBE": "primitive_cube_add",
-                    "SPHERE": "primitive_uv_sphere_add",
-                    "CYLINDER": "primitive_cylinder_add",
-                    "PLANE": "primitive_plane_add",
-                    "CONE": "primitive_cone_add",
-                    "TORUS": "primitive_torus_add",
-                    "EMPTY": "object.empty_add",
-                    "CAMERA": "object.camera_add",
-                    "LIGHT": "object.light_add",
-                }
-                obj_type = params.get("type", "CUBE").upper()
-                op_name = type_map.get(obj_type)
-                if not op_name:
-                    return {"status": "error", "message": f"Unsupported object type: {obj_type}"}
-                
-                bpy.ops.object.select_all(action='DESELECT')
-                getattr(bpy.ops.mesh if "primitive" in op_name else bpy.ops.object, op_name)()
-                obj = bpy.context.active_object
-                if params.get("name"):
-                    obj.name = params["name"]
-                if params.get("location"):
-                    obj.location = params["location"]
-                if params.get("rotation"):
-                    obj.rotation_euler = params["rotation"]
-                if params.get("scale"):
-                    obj.scale = params["scale"]
-                return {"status": "success", "result": {"name": obj.name}}
-            
-            elif cmd_type == "modify_object":
-                obj = bpy.data.objects.get(params.get("name"))
-                if not obj:
-                    return {"status": "error", "message": f"Object '{params.get('name')}' not found"}
-                if "location" in params:
-                    obj.location = params["location"]
-                if "rotation" in params:
-                    obj.rotation_euler = params["rotation"]
-                if "scale" in params:
-                    obj.scale = params["scale"]
-                if "visible" in params:
-                    obj.hide_viewport = not params["visible"]
-                return {"status": "success", "result": {"modified": obj.name}}
-            
-            elif cmd_type == "delete_object":
-                obj = bpy.data.objects.get(params.get("name"))
-                if not obj:
-                    return {"status": "error", "message": f"Object '{params.get('name')}' not found"}
-                bpy.ops.object.select_all(action='DESELECT')
-                obj.select_set(True)
-                bpy.ops.object.delete()
-                return {"status": "success", "result": {"deleted": params["name"]}}
-            
-            elif cmd_type == "set_material":
-                obj = bpy.data.objects.get(params.get("object_name"))
-                if not obj:
-                    return {"status": "error", "message": f"Object '{params.get('object_name')}' not found"}
-                
-                mat_name = params.get("material_name", f"Mat_{obj.name}")
-                mat = bpy.data.materials.get(mat_name) or bpy.data.materials.new(mat_name)
-                if params.get("color"):
-                    mat.diffuse_color = (*params["color"], 1.0)  # Add alpha
-                if "metallic" in params:
-                    mat.metallic = params["metallic"]
-                if "roughness" in params:
-                    mat.roughness = params["roughness"]
-                if "specular" in params:
-                    mat.specular_intensity = params["specular"]
-                
-                if not obj.data.materials:
-                    obj.data.materials.append(mat)
-                else:
-                    obj.data.materials[0] = mat
-                return {"status": "success", "result": {"material_name": mat.name}}
-            
-            elif cmd_type == "render_scene":
-                scene = bpy.context.scene
-                scene.render.resolution_x = params.get("resolution_x", 800)
-                scene.render.resolution_y = params.get("resolution_y", 600)
-                if params.get("output_path"):
-                    scene.render.filepath = params["output_path"]
-                bpy.ops.render.render(write_still=bool(params.get("output_path")))
-                return {"status": "success", "result": {"rendered": True, "output_path": scene.render.filepath}}
-            
-            elif cmd_type == "execute_code":
-                exec(params.get("code", ""))
-                return {"status": "success", "result": {"executed": True}}
-            
-            elif cmd_type == "create_text":
-                bpy.ops.object.text_add()
-                obj = bpy.context.active_object
-                text_obj = obj.data
-                text_obj.body = params.get("text", "Text")
-                if params.get("name"):
-                    obj.name = params["name"]
-                if params.get("location"):
-                    obj.location = params["location"]
-                if "extrude" in params:
-                    text_obj.extrude = params["extrude"]
-                if "bevel_depth" in params:
-                    text_obj.bevel_depth = params["bevel_depth"]
-                return {"status": "success", "result": {"name": obj.name}}
-            
-            elif cmd_type == "add_animation":
-                obj = bpy.data.objects.get(params.get("object_name"))
-                if not obj:
-                    return {"status": "error", "message": f"Object '{params.get('object_name')}' not found"}
-                prop = params.get("property")
-                keyframes = params.get("keyframes", [])
-                interp = params.get("interpolation", "BEZIER").upper()
-                
-                obj.animation_data_create()
-                action = bpy.data.actions.new(f"{obj.name}_{prop}_action")
-                obj.animation_data.action = action
-                fcurve = action.fcurves.new(data_path=prop, index=0)
-                
-                for kf in keyframes:
-                    frame = kf.get("frame")
-                    value = kf.get("value")
-                    fcurve.keyframe_points.insert(frame, value)
-                    kf_point = fcurve.keyframe_points[-1]
-                    kf_point.interpolation = interp
-                
-                return {"status": "success", "result": {"keyframes_added": len(keyframes)}}
-            
-            elif cmd_type == "import_model":
-                file_path = params.get("file_path")
-                if file_path.endswith((".obj", ".fbx", ".stl")):
-                    if file_path.endswith(".obj"):
-                        bpy.ops.import_scene.obj(filepath=file_path)
-                    elif file_path.endswith(".fbx"):
-                        bpy.ops.import_scene.fbx(filepath=file_path)
-                    elif file_path.endswith(".stl"):
-                        bpy.ops.import_mesh.stl(filepath=file_path)
-                    
-                    imported = bpy.context.selected_objects
-                    if params.get("location"):
-                        for obj in imported:
-                            obj.location = params["location"]
-                    if params.get("rotation"):
-                        for obj in imported:
-                            obj.rotation_euler = params["rotation"]
-                    if "scale" in params:
-                        for obj in imported:
-                            obj.scale = (params["scale"],) * 3
-                    return {"status": "success", "result": {"imported": True, "object_count": len(imported)}}
-                return {"status": "error", "message": f"Unsupported file format: {file_path}"}
-            
-            else:
-                return {"status": "error", "message": f"Unknown command: {cmd_type}"}
-        
-        except Exception as e:
-            logger.error(f"Command '{cmd_type}' failed: {str(e)}")
-            return {"status": "error", "message": str(e)}
+        logger.info(f"Processing command: {cmd_type}, params: {params}")
 
-# Blender operator to start/stop the server
-class MCP_OT_Server(Operator):
-    bl_idname = "mcp.server_toggle"
-    bl_label = "Toggle MCP Server"
-    bl_description = "Start or stop the MCP server"
-    
-    def execute(self, context):
-        global _server
-        addon_prefs = context.preferences.addons[__name__].preferences
-        
-        if addon_prefs.server_running:
-            if _server:
-                _server.stop()
-            addon_prefs.server_running = False
-            self.report({'INFO'}, "MCP Server stopped")
+        if cmd_type == "batch":
+            results = []
+            for sub_command in params.get("commands", []):
+                sub_result = self._process_single_command(sub_command)
+                results.append(sub_result)
+            return {"status": "success", "result": results}
+        return self._process_single_command(command)
+
+    def _process_single_command(self, command):
+        cmd_type = command.get("type")
+        params = command.get("params", {})
+        handlers = {
+            "ping": lambda **kwargs: {"pong": True},
+            "get_scene_info": self.get_scene_info,
+            "get_object_info": self.get_object_info,
+            "create_object": self.create_object,
+            "modify_object": self.modify_object,
+            "delete_object": self.delete_object,
+            "set_material": self.set_material,
+            "execute_code": self.execute_code,
+            "create_keyframe": self.create_keyframe,
+            "create_terrain": self.create_terrain,
+            "export_asset": self.export_asset,
+        }
+        handler = handlers.get(cmd_type)
+        if handler:
+            try:
+                result = handler(**params)
+                return {"status": "success", "result": result}
+            except Exception as e:
+                logger.error(f"Error in handler: {str(e)}", exc_info=True)
+                return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": f"Unknown command: {cmd_type}"}
+
+    def get_scene_info(self):
+        scene = bpy.context.scene
+        return {
+            "name": scene.name,
+            "object_count": len(scene.objects),
+            "objects": [{"name": obj.name, "type": obj.type, "location": [obj.location.x, obj.location.y, obj.location.z]} for obj in scene.objects[:10]]
+        }
+
+    def get_object_info(self, name):
+        obj = bpy.data.objects.get(name)
+        if not obj:
+            raise ValueError(f"Object '{name}' not found")
+        return {
+            "name": obj.name,
+            "type": obj.type,
+            "location": [obj.location.x, obj.location.y, obj.location.z],
+            "rotation": [obj.rotation_euler.x, obj.rotation_euler.y, obj.rotation_euler.z],
+            "scale": [obj.scale.x, obj.scale.y, obj.scale.z],
+            "visible": obj.visible_get()
+        }
+
+    def create_object(self, type="CUBE", name=None, location=[0, 0, 0], rotation=[0, 0, 0], scale=[1, 1, 1]):
+        bpy.ops.object.select_all(action='DESELECT')
+        if type == "CUBE":
+            bpy.ops.mesh.primitive_cube_add(location=location, rotation=rotation, scale=scale)
+        elif type == "SPHERE":
+            bpy.ops.mesh.primitive_uv_sphere_add(location=location, rotation=rotation, scale=scale)
+        elif type == "CYLINDER":
+            bpy.ops.mesh.primitive_cylinder_add(location=location, rotation=rotation, scale=scale)
+        elif type == "PLANE":
+            bpy.ops.mesh.primitive_plane_add(location=location, rotation=rotation, scale=scale)
+        elif type == "CONE":
+            bpy.ops.mesh.primitive_cone_add(location=location, rotation=rotation, scale=scale)
+        elif type == "TORUS":
+            bpy.ops.mesh.primitive_torus_add(location=location, rotation=rotation, scale=scale)
+        elif type == "EMPTY":
+            bpy.ops.object.empty_add(location=location, rotation=rotation, scale=scale)
+        elif type == "CAMERA":
+            bpy.ops.object.camera_add(location=location, rotation=rotation)
+        elif type == "LIGHT":
+            bpy.ops.object.light_add(type='POINT', location=location, rotation=rotation, scale=scale)
         else:
-            if not _server:
-                _server = MCP_Server(addon_prefs.host, addon_prefs.port)
-            _server.start()
-            addon_prefs.server_running = True
-            self.report({'INFO'}, "MCP Server started")
-        return {'FINISHED'}
+            raise ValueError(f"Unsupported type: {type}")
+        obj = bpy.context.active_object
+        if name:
+            obj.name = name
+        return {
+            "name": obj.name,
+            "type": obj.type,
+            "location": [obj.location.x, obj.location.y, obj.location.z],
+            "rotation": [obj.rotation_euler.x, obj.rotation_euler.y, obj.rotation_euler.z],
+            "scale": [obj.scale.x, obj.scale.y, obj.scale.z]
+        }
 
-# Addon preferences for settings
-class MCP_AddonPreferences(bpy.types.AddonPreferences):
-    bl_idname = __name__
-    
-    server_running: BoolProperty(name="Server Running", default=False)
-    port: IntProperty(name="Port", default=DEFAULT_PORT, min=1024, max=65535)
-    host: StringProperty(name="Host", default=DEFAULT_HOST)
-    
-    def draw(self, context):
-        layout = self.layout
-        layout.prop(self, "host")
-        layout.prop(self, "port")
-        layout.label(text=f"Server Status: {'Running' if self.server_running else 'Stopped'}")
+    def modify_object(self, name, location=None, rotation=None, scale=None, visible=None):
+        obj = bpy.data.objects.get(name)
+        if not obj:
+            raise ValueError(f"Object '{name}' not found")
+        if location:
+            obj.location = location
+        if rotation:
+            obj.rotation_euler = rotation
+        if scale:
+            obj.scale = scale
+        if visible is not None:
+            obj.hide_viewport = not visible
+        return {
+            "name": obj.name,
+            "location": [obj.location.x, obj.location.y, obj.location.z],
+            "rotation": [obj.rotation_euler.x, obj.rotation_euler.y, obj.rotation_euler.z],
+            "scale": [obj.scale.x, obj.scale.y, obj.scale.z],
+            "visible": obj.visible_get()
+        }
 
-# Sidebar panel
-class MCP_PT_Panel(Panel):
-    bl_label = "MCP Server"
-    bl_idname = "MCP_PT_panel"
+    def delete_object(self, name):
+        obj = bpy.data.objects.get(name)
+        if not obj:
+            raise ValueError(f"Object '{name}' not found")
+        bpy.ops.object.select_all(action='DESELECT')
+        obj.select_set(True)
+        bpy.ops.object.delete()
+        return {"deleted": name}
+
+    def set_material(self, object_name, material_name=None, color=None):
+        obj = bpy.data.objects.get(object_name)
+        if not obj or not hasattr(obj.data, 'materials'):
+            raise ValueError(f"Invalid object: {object_name}")
+        if material_name:
+            mat = bpy.data.materials.get(material_name) or bpy.data.materials.new(material_name)
+        else:
+            mat_name = f"Mat_{object_name}"
+            mat = bpy.data.materials.get(mat_name) or bpy.data.materials.new(mat_name)
+        if not mat.use_nodes:
+            mat.use_nodes = True
+        principled = mat.node_tree.nodes.get('Principled BSDF') or mat.node_tree.nodes.new('ShaderNodeBsdfPrincipled')
+        output = mat.node_tree.nodes.get('Material Output') or mat.node_tree.nodes.new('ShaderNodeOutputMaterial')
+        if not principled.outputs[0].links:
+            mat.node_tree.links.new(principled.outputs[0], output.inputs[0])
+        if color and len(color) >= 3:
+            principled.inputs['Base Color'].default_value = (*color[:3], 1.0 if len(color) < 4 else color[3])
+        if not obj.data.materials:
+            obj.data.materials.append(mat)
+        else:
+            obj.data.materials[0] = mat
+        return {"material_name": mat.name}
+
+    def create_keyframe(self, object_name, frame, location=None, rotation=None, scale=None):
+        obj = bpy.data.objects.get(object_name)
+        if not obj:
+            raise ValueError(f"Object '{object_name}' not found")
+        bpy.context.scene.frame_set(frame)
+        if location:
+            obj.location = location
+            obj.keyframe_insert(data_path="location", frame=frame)
+        if rotation:
+            obj.rotation_euler = rotation
+            obj.keyframe_insert(data_path="rotation_euler", frame=frame)
+        if scale:
+            obj.scale = scale
+            obj.keyframe_insert(data_path="scale", frame=frame)
+        return {"frame": frame, "object_name": object_name}
+
+    def create_terrain(self, name="Terrain", size=None, height=1.0, subdivisions=64):
+        size = size or [10.0, 10.0]
+        bpy.ops.mesh.primitive_plane_add(size=size[0], location=[0, 0, 0])
+        obj = bpy.context.active_object
+        obj.name = name
+        # Subdivide for terrain detail
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.subdivide(number_cuts=subdivisions)
+        bpy.ops.object.mode_set(mode='OBJECT')
+        # Add displace modifier
+        bpy.ops.object.modifier_add(type='DISPLACE')
+        displace = obj.modifiers["Displace"]
+        displace.strength = height
+        # Add a noise texture for displacement
+        tex = bpy.data.textures.new(name=f"{name}_Noise", type='CLOUDS')
+        displace.texture = tex
+        displace.texture_coords = 'LOCAL'
+        bpy.ops.object.modifier_apply(modifier="Displace")
+        return {"name": obj.name, "size": size, "height": height}
+
+    def export_asset(self, object_name, export_path, format="GLTF"):
+        obj = bpy.data.objects.get(object_name)
+        if not obj:
+            raise ValueError(f"Object '{object_name}' not found")
+        # Deselect all and select the target object
+        bpy.ops.object.select_all(action='DESELECT')
+        obj.select_set(True)
+        bpy.context.view_layer.objects.active = obj
+        if format == "GLTF":
+            bpy.ops.export_scene.gltf(filepath=export_path, export_format='GLTF_SEPARATE', use_selection=True)
+        elif format == "FBX":
+            bpy.ops.export_scene.fbx(filepath=export_path, use_selection=True)
+        else:
+            raise ValueError(f"Unsupported export format: {format}")
+        return {"path": export_path, "format": format}
+
+    def execute_code(self, code):
+        namespace = {"bpy": bpy}
+        exec(code, namespace)
+        return {"executed": True}
+
+# UI Panel
+class BLENDERMCP_PT_Panel(bpy.types.Panel):
+    bl_label = "Blender MCP"
+    bl_idname = "BLENDERMCP_PT_Panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "MCP"
-    
+    bl_category = 'BlenderMCP'
+
     def draw(self, context):
         layout = self.layout
-        addon_prefs = context.preferences.addons[__name__].preferences
-        
-        layout.operator("mcp.server_toggle", text="Stop Server" if addon_prefs.server_running else "Start Server")
-        layout.label(text=f"Host: {addon_prefs.host}")
-        layout.label(text=f"Port: {addon_prefs.port}")
+        scene = context.scene
+        layout.prop(scene, "blendermcp_port")
+        if not scene.blendermcp_server_running:
+            layout.operator("blendermcp.start_server", text="Start MCP Server")
+        else:
+            layout.operator("blendermcp.stop_server", text="Stop MCP Server")
+            layout.label(text=f"Running on port {scene.blendermcp_port}")
+
+# Operators
+class BLENDERMCP_OT_StartServer(bpy.types.Operator):
+    bl_idname = "blendermcp.start_server"
+    bl_label = "Start MCP Server"
+    bl_description = "Start the MCP server"
+
+    def execute(self, context):
+        scene = context.scene
+        try:
+            if not hasattr(bpy.types, "blendermcp_server") or not bpy.types.blendermcp_server:
+                bpy.types.blendermcp_server = BlenderMCPServer(port=scene.blendermcp_port)
+            bpy.types.blendermcp_server.start()
+            scene.blendermcp_server_running = True
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to start MCP server: {str(e)}")
+            scene.blendermcp_server_running = False
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+class BLENDERMCP_OT_StopServer(bpy.types.Operator):
+    bl_idname = "blendermcp.stop_server"
+    bl_label = "Stop MCP Server"
+    bl_description = "Stop the MCP server"
+
+    def execute(self, context):
+        scene = context.scene
+        if hasattr(bpy.types, "blendermcp_server") and bpy.types.blendermcp_server:
+            bpy.types.blendermcp_server.stop()
+            del bpy.types.blendermcp_server
+        scene.blendermcp_server_running = False
+        return {'FINISHED'}
 
 # Registration
-classes = (MCP_OT_Server, MCP_AddonPreferences, MCP_PT_Panel)
-
 def register():
-    for cls in classes:
-        bpy.utils.register_class(cls)
-    logger.info("Blender MCP Addon registered")
-    global _server
-    if not _server:
-        addon_prefs = bpy.context.preferences.addons.get(__name__).preferences
-        _server = MCP_Server(addon_prefs.host, addon_prefs.port)
+    bpy.types.Scene.blendermcp_port = IntProperty(
+        name="Port", default=9876, min=1024, max=65535)
+    bpy.types.Scene.blendermcp_server_running = BoolProperty(default=False)
+    bpy.utils.register_class(BLENDERMCP_PT_Panel)
+    bpy.utils.register_class(BLENDERMCP_OT_StartServer)
+    bpy.utils.register_class(BLENDERMCP_OT_StopServer)
+    logger.info("BlenderMCP addon registered")
 
 def unregister():
-    global _server
-    if _server and _server.running:
-        _server.stop()
-    _server = None
-    for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
-    logger.info("Blender MCP Addon unregistered")
+    if hasattr(bpy.types, "blendermcp_server") and bpy.types.blendermcp_server:
+        bpy.types.blendermcp_server.stop()
+        del bpy.types.blendermcp_server
+    bpy.utils.unregister_class(BLENDERMCP_PT_Panel)
+    bpy.utils.unregister_class(BLENDERMCP_OT_StartServer)
+    bpy.utils.unregister_class(BLENDERMCP_OT_StopServer)
+    del bpy.types.Scene.blendermcp_port
+    del bpy.types.Scene.blendermcp_server_running
+    logger.info("BlenderMCP addon unregistered")
 
 if __name__ == "__main__":
     register()
