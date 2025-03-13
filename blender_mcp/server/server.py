@@ -4,7 +4,7 @@ import json
 import logging
 import time
 import os
-import base64  # Added missing import
+import base64
 from dataclasses import dataclass
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List, Optional
@@ -182,11 +182,11 @@ async def server_lifespan(server: FastMCP):
 # Create the MCP server
 mcp = FastMCP(
     "BlenderMCP",
-    description="Blender integration through the Model Context Protocol",
+    description="Blender integration through the Model Context Protocol with advanced prebuilt tools",
     lifespan=server_lifespan
 )
 
-# Define tools
+# Original Tools (Preserved)
 @mcp.tool()
 def get_scene_info(ctx: Context) -> str:
     """Get detailed information about the current Blender scene."""
@@ -410,16 +410,14 @@ def get_render_preview(ctx: Context, resolution: List[int] = [200, 200]) -> Dict
         result = blender.send_command("get_render_preview", {"resolution": resolution})
         base64_string = result["image_base64"]
         
-        # Server-side rendering logic: save the image temporarily
         preview_path = os.path.join(LOG_DIR, "render_preview.png")
         with open(preview_path, "wb") as f:
             f.write(base64.b64decode(base64_string))
         logger.info(f"Preview image saved to {preview_path}")
         
-        # Return both the file path and base64 string to the LLM
         return {
             "file_path": preview_path,
-            "base64_string": base64_string, 
+            # "base64_string": base64_string,
             "message": f"Preview rendered and saved to {preview_path}. Please describe what you see if adjustments are needed."
         }
     except Exception as e:
@@ -438,6 +436,67 @@ def point_camera_at(ctx: Context, camera_name: str, target_location: List[float]
         return f"Pointed {camera_name} at {target_location}"
     except Exception as e:
         logger.error(f"Error pointing camera: {str(e)}")
+        return f"Error: {str(e)}"
+
+# New Prebuilt Modular Tool for Car
+@mcp.tool()
+def create_car(
+    ctx: Context,
+    name: str = "Car",
+    body_scale: List[float] = [2.0, 1.0, 0.5],  # Length, Width, Height
+    hood_scale: List[float] = [0.8, 0.9, 0.2],  # Length, Width, Height
+    tire_radius: float = 0.4,
+    tire_thickness: float = 0.2,
+    color: List[float] = [0.8, 0.2, 0.2],  # RGB for body
+    has_spoiler: bool = False,
+    spoiler_scale: List[float] = [0.1, 1.0, 0.1],
+    gun_count: int = 0,  # Number of guns
+    gun_type: str = "machine_gun",  # "machine_gun" or "cannon"
+    gun_position: str = "roof"  # "roof" or "hood"
+) -> str:
+    """
+    Create a modular, realistic car with customizable components.
+
+    Parameters:
+    - name: Name of the car (default: "Car").
+    - body_scale: [length, width, height] of the car body (default: [2.0, 1.0, 0.5]).
+    - hood_scale: [length, width, height] of the hood (default: [0.8, 0.9, 0.2]).
+    - tire_radius: Radius of tires (default: 0.4).
+    - tire_thickness: Thickness of tires (default: 0.2).
+    - color: [R, G, B] values for the body (0.0 to 1.0, default: [0.8, 0.2, 0.2] for red).
+    - has_spoiler: Add a spoiler (default: False).
+    - spoiler_scale: [length, width, height] of the spoiler (default: [0.1, 1.0, 0.1]).
+    - gun_count: Number of guns to add (0-4, default: 0).
+    - gun_type: Type of gun ("machine_gun" or "cannon", default: "machine_gun").
+    - gun_position: Where to place guns ("roof" or "hood", default: "roof").
+
+    Returns:
+    Confirmation string with the car’s name.
+
+    Examples:
+    - Simple sedan: create_car(name="Sedan")
+    - Sports car with spoiler: create_car(name="SportsCar", body_scale=[1.8, 0.8, 0.4], has_spoiler=True, color=[0.0, 0.0, 1.0])
+    - Armored car: create_car(name="TankCar", body_scale=[2.5, 1.2, 0.8], gun_count=2, gun_type="cannon", gun_position="hood")
+    """
+    try:
+        blender = get_blender_connection()
+        params = {
+            "name": name,
+            "body_scale": body_scale,
+            "hood_scale": hood_scale,
+            "tire_radius": tire_radius,
+            "tire_thickness": tire_thickness,
+            "color": color,
+            "has_spoiler": has_spoiler,
+            "spoiler_scale": spoiler_scale,
+            "gun_count": min(max(gun_count, 0), 4),  # Clamp between 0 and 4
+            "gun_type": gun_type,
+            "gun_position": gun_position
+        }
+        result = blender.send_command("create_car", params)
+        return f"Created car: {result['created']}"
+    except Exception as e:
+        logger.error(f"Error creating car: {str(e)}")
         return f"Error: {str(e)}"
 
 def main():

@@ -142,15 +142,10 @@ class BlenderMCPServer:
         handlers = {
             "ping": lambda **kwargs: {"pong": True},
             "get_scene_info": self.get_scene_info,
-            "get_object_info": self.get_object_info,
             "create_object": self.create_object,
             "modify_object": self.modify_object,
             "delete_object": self.delete_object,
             "set_material": self.set_material,
-            "execute_code": self.execute_code,
-            "create_keyframe": self.create_keyframe,
-            "create_terrain": self.create_terrain,
-            "export_asset": self.export_asset,
             "subdivide_mesh": self.subdivide_mesh,
             "add_modifier": self.add_modifier,
             "apply_modifier": self.apply_modifier,
@@ -162,6 +157,7 @@ class BlenderMCPServer:
             "render_scene": self.render_scene,
             "get_render_preview": self.get_render_preview,
             "point_camera_at": self.point_camera_at,
+            "create_car": self.create_car  # New handler
         }
         handler = handlers.get(cmd_type)
         if handler:
@@ -173,6 +169,7 @@ class BlenderMCPServer:
                 return {"status": "error", "message": str(e), "suggestion": "Check parameters or object existence"}
         return {"status": "error", "message": f"Unknown command: {cmd_type}"}
 
+    # Original Handlers
     def get_scene_info(self):
         """Return detailed information about the current Blender scene."""
         scene = bpy.context.scene
@@ -201,20 +198,6 @@ class BlenderMCPServer:
             "cameras": cameras,
             "frame_range": [scene.frame_start, scene.frame_end],
             "render_settings": {"resolution": [scene.render.resolution_x, scene.render.resolution_y]}
-        }
-
-    def get_object_info(self, name):
-        """Get information about a specific object."""
-        obj = bpy.data.objects.get(name)
-        if not obj:
-            raise ValueError(f"Object '{name}' not found")
-        return {
-            "name": obj.name,
-            "type": obj.type,
-            "location": list(obj.location),
-            "rotation": list(obj.rotation_euler),
-            "scale": list(obj.scale),
-            "visible": obj.visible_get()
         }
 
     def create_object(self, type="CUBE", name=None, location=[0, 0, 0], rotation=[0, 0, 0], scale=[1, 1, 1], relative_to=None):
@@ -308,46 +291,6 @@ class BlenderMCPServer:
         else:
             obj.data.materials[0] = mat
         return {"material_name": mat.name}
-
-    def execute_code(self, code):
-        """Execute arbitrary Python code in Blender."""
-        try:
-            exec(code)
-            return {"executed": True}
-        except Exception as e:
-            raise ValueError(f"Code execution failed: {str(e)}")
-
-    def create_keyframe(self, object_name, frame, properties):
-        """Create a keyframe for an object."""
-        obj = bpy.data.objects.get(object_name)
-        if not obj:
-            raise ValueError(f"Object '{object_name}' not found")
-        bpy.context.scene.frame_set(frame)
-        for prop, value in properties.items():
-            setattr(obj, prop, value)
-            obj.keyframe_insert(data_path=prop, frame=frame)
-        return {"keyframed": object_name, "frame": frame}
-
-    def create_terrain(self, name, size, height):
-        """Create a simple terrain mesh."""
-        bpy.ops.mesh.primitive_plane_add(size=size, location=(0, 0, 0))
-        obj = bpy.context.active_object
-        obj.name = name
-        mod = obj.modifiers.new(name="Displace", type='DISPLACE')
-        tex = bpy.data.textures.new("TerrainTex", type='CLOUDS')
-        mod.texture = tex
-        mod.strength = height
-        bpy.context.view_layer.objects.active = obj
-        bpy.ops.object.modifier_apply(modifier=mod.name)
-        return {"created": name}
-
-    def export_asset(self, filepath, format="OBJ"):
-        """Export the scene or selected objects."""
-        if format == "OBJ":
-            bpy.ops.export_scene.obj(filepath=filepath, use_selection=False)
-        else:
-            raise ValueError(f"Unsupported format: {format}")
-        return {"exported_to": filepath}
 
     def subdivide_mesh(self, name, cuts):
         """Subdivide a mesh object."""
@@ -468,7 +411,6 @@ class BlenderMCPServer:
         scene = bpy.context.scene
         if not scene.camera:
             raise ValueError("No active camera set")
-        # Temporarily adjust render settings
         original_res_x = scene.render.resolution_x
         original_res_y = scene.render.resolution_y
         original_filepath = scene.render.filepath
@@ -476,16 +418,12 @@ class BlenderMCPServer:
         scene.render.resolution_y = resolution[1]
         temp_filepath = os.path.join(LOG_DIR, "preview.png")
         scene.render.filepath = temp_filepath
-        # Render to temporary file
         bpy.ops.render.render(write_still=True)
-        # Read and encode the image
         with open(temp_filepath, "rb") as f:
             img_data = base64.b64encode(f.read()).decode('utf-8')
-        # Restore original settings
         scene.render.resolution_x = original_res_x
         scene.render.resolution_y = original_res_y
         scene.render.filepath = original_filepath
-        # Clean up temporary file
         if os.path.exists(temp_filepath):
             os.remove(temp_filepath)
         return {"image_base64": img_data}
@@ -498,9 +436,113 @@ class BlenderMCPServer:
         cam_loc = mathutils.Vector(cam.location)
         target = mathutils.Vector(target_location)
         direction = (target - cam_loc).normalized()
-        rot_quat = direction.to_track_quat('-Z', 'Y')  # -Z is camera forward, Y is up
+        rot_quat = direction.to_track_quat('-Z', 'Y')
         cam.rotation_euler = rot_quat.to_euler()
         return {"pointed_camera": camera_name, "target": list(target)}
+
+    # New Handler for Modular Car
+    def create_car(
+        self,
+        name="Car",
+        body_scale=[2.0, 1.0, 0.5],
+        hood_scale=[0.8, 0.9, 0.2],
+        tire_radius=0.4,
+        tire_thickness=0.2,
+        color=[0.8, 0.2, 0.2],
+        has_spoiler=False,
+        spoiler_scale=[0.1, 1.0, 0.1],
+        gun_count=0,
+        gun_type="machine_gun",
+        gun_position="roof"
+    ):
+        """Create a modular car with customizable components."""
+        bpy.ops.object.select_all(action='DESELECT')
+
+        # Create car body
+        bpy.ops.mesh.primitive_cube_add(size=1, location=(0, 0, body_scale[2] / 2))
+        car_body = bpy.context.active_object
+        car_body.name = f"{name}_Body"
+        car_body.scale = body_scale
+
+        # Create hood
+        hood_x_pos = body_scale[0] / 2 - hood_scale[0] / 2
+        bpy.ops.mesh.primitive_cube_add(size=1, location=(hood_x_pos, 0, body_scale[2] + hood_scale[2] / 2))
+        hood = bpy.context.active_object
+        hood.name = f"{name}_Hood"
+        hood.scale = hood_scale
+
+        # Create tires
+        tire_positions = [
+            (body_scale[0] / 2 - tire_radius, body_scale[1] / 2, tire_radius),
+            (body_scale[0] / 2 - tire_radius, -body_scale[1] / 2, tire_radius),
+            (-body_scale[0] / 2 + tire_radius, body_scale[1] / 2, tire_radius),
+            (-body_scale[0] / 2 + tire_radius, -body_scale[1] / 2, tire_radius)
+        ]
+        tires = []
+        for i, pos in enumerate(tire_positions):
+            bpy.ops.mesh.primitive_cylinder_add(radius=tire_radius, depth=tire_thickness, location=pos)
+            tire = bpy.context.active_object
+            tire.name = f"{name}_Tire_{i}"
+            tire.rotation_euler = (0, 1.5708, 0)  # Rotate to lie flat
+            tires.append(tire)
+
+        # Add spoiler if requested
+        if has_spoiler:
+            spoiler_x_pos = -body_scale[0] / 2 - spoiler_scale[0] / 2
+            bpy.ops.mesh.primitive_cube_add(size=1, location=(spoiler_x_pos, 0, body_scale[2] + spoiler_scale[2] / 2))
+            spoiler = bpy.context.active_object
+            spoiler.name = f"{name}_Spoiler"
+            spoiler.scale = spoiler_scale
+
+        # Add guns if requested
+        guns = []
+        if gun_count > 0:
+            gun_spacing = body_scale[1] / (gun_count + 1)
+            for i in range(gun_count):
+                if gun_position == "roof":
+                    x_pos = 0
+                    y_pos = (i + 1) * gun_spacing - body_scale[1] / 2
+                    z_pos = body_scale[2] + 0.2
+                else:  # hood
+                    x_pos = hood_x_pos
+                    y_pos = (i + 1) * gun_spacing - body_scale[1] / 2
+                    z_pos = body_scale[2] + hood_scale[2] + 0.2
+                if gun_type == "machine_gun":
+                    bpy.ops.mesh.primitive_cube_add(size=1, location=(x_pos, y_pos, z_pos))
+                    gun = bpy.context.active_object
+                    gun.scale = [0.3, 0.1, 0.1]
+                else:  # cannon
+                    bpy.ops.mesh.primitive_cylinder_add(radius=0.1, depth=0.5, location=(x_pos, y_pos, z_pos))
+                    gun = bpy.context.active_object
+                    gun.rotation_euler = (0, 1.5708, 0)
+                gun.name = f"{name}_Gun_{i}"
+                guns.append(gun)
+
+        # Apply material
+        mat = bpy.data.materials.new(f"{name}_Material")
+        mat.use_nodes = True
+        nodes = mat.node_tree.nodes
+        nodes.clear()
+        output = nodes.new('ShaderNodeOutputMaterial')
+        shader = nodes.new('ShaderNodeBsdfPrincipled')
+        shader.inputs['Base Color'].default_value = (*color[:3], 1.0)
+        shader.inputs['Metallic'].default_value = 0.8
+        shader.inputs['Roughness'].default_value = 0.3
+        mat.node_tree.links.new(shader.outputs[0], output.inputs[0])
+        car_body.data.materials.append(mat)
+        hood.data.materials.append(mat)
+        if has_spoiler:
+            spoiler.data.materials.append(mat)
+
+        # Group all parts under an empty
+        bpy.ops.object.empty_add(location=(0, 0, 0))
+        car_group = bpy.context.active_object
+        car_group.name = name
+        parts = [car_body, hood] + tires + ([spoiler] if has_spoiler else []) + guns
+        for part in parts:
+            part.parent = car_group
+
+        return {"created": name}
 
 # UI Panel
 class BLENDERMCP_PT_Panel(bpy.types.Panel):
