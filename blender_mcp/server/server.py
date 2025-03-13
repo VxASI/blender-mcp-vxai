@@ -4,6 +4,7 @@ import json
 import logging
 import time
 import os
+import base64  # Added missing import
 from dataclasses import dataclass
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List, Optional
@@ -188,11 +189,7 @@ mcp = FastMCP(
 # Define tools
 @mcp.tool()
 def get_scene_info(ctx: Context) -> str:
-    """Get detailed information about the current Blender scene.
-
-    Returns:
-        A JSON string containing scene details (objects, lights, cameras, etc.).
-    """
+    """Get detailed information about the current Blender scene."""
     try:
         blender = get_blender_connection()
         result = blender.send_command("get_scene_info")
@@ -211,16 +208,7 @@ def create_object(
     scale: List[float] = None,
     relative_to: str = None
 ) -> str:
-    """Create a new object in the Blender scene.
-
-    Args:
-        type: Object type ("CUBE", "CYLINDER", etc.).
-        name: Optional name for the object.
-        location: Position as [x, y, z].
-        rotation: Euler rotation as [x, y, z] in radians.
-        scale: Scale as [x, y, z].
-        relative_to: Name of another object to position relative to.
-    """
+    """Create a new object in the Blender scene."""
     try:
         blender = get_blender_connection()
         params = {"type": type}
@@ -249,15 +237,7 @@ def modify_object(
     scale: List[float] = None,
     visible: bool = None
 ) -> str:
-    """Modify an existing object.
-
-    Args:
-        name: Name of the object to modify.
-        location: New position as [x, y, z].
-        rotation: New Euler rotation as [x, y, z] in radians.
-        scale: New scale as [x, y, z].
-        visible: Visibility state (True/False).
-    """
+    """Modify an existing object."""
     try:
         blender = get_blender_connection()
         params = {"name": name}
@@ -297,17 +277,7 @@ def set_material(
     roughness: float = None,
     ior: float = None
 ) -> str:
-    """Set or create a material for an object.
-
-    Args:
-        object_name: Name of the object.
-        material_name: Optional name for the material.
-        color: RGB color as [r, g, b].
-        material_type: "DIFFUSE", "METALLIC", or "GLASS".
-        metallic: Metallic value (for METALLIC type).
-        roughness: Roughness value (for METALLIC type).
-        ior: Index of refraction (for GLASS type).
-    """
+    """Set or create a material for an object."""
     try:
         blender = get_blender_connection()
         params = {"object_name": object_name, "material_type": material_type}
@@ -329,12 +299,7 @@ def set_material(
 
 @mcp.tool()
 def subdivide_mesh(ctx: Context, object_name: str, cuts: int) -> str:
-    """Subdivide the mesh of an object.
-
-    Args:
-        object_name: Name of the mesh object.
-        cuts: Number of subdivision cuts.
-    """
+    """Subdivide the mesh of an object."""
     try:
         blender = get_blender_connection()
         result = blender.send_command("subdivide_mesh", {"name": object_name, "cuts": cuts})
@@ -345,13 +310,7 @@ def subdivide_mesh(ctx: Context, object_name: str, cuts: int) -> str:
 
 @mcp.tool()
 def add_modifier(ctx: Context, object_name: str, modifier_type: str, params: Dict[str, Any]) -> str:
-    """Add a modifier to an object.
-
-    Args:
-        object_name: Name of the object.
-        modifier_type: Type of modifier (e.g., "SUBSURF").
-        params: Dictionary of modifier properties (e.g., {"levels": 2}).
-    """
+    """Add a modifier to an object."""
     try:
         blender = get_blender_connection()
         result = blender.send_command("add_modifier", {"name": object_name, "modifier_type": modifier_type, "params": params})
@@ -362,12 +321,7 @@ def add_modifier(ctx: Context, object_name: str, modifier_type: str, params: Dic
 
 @mcp.tool()
 def apply_modifier(ctx: Context, object_name: str, modifier_name: str) -> str:
-    """Apply a modifier to an object.
-
-    Args:
-        object_name: Name of the object.
-        modifier_name: Name of the modifier to apply.
-    """
+    """Apply a modifier to an object."""
     try:
         blender = get_blender_connection()
         result = blender.send_command("apply_modifier", {"name": object_name, "modifier_name": modifier_name})
@@ -378,13 +332,7 @@ def apply_modifier(ctx: Context, object_name: str, modifier_name: str) -> str:
 
 @mcp.tool()
 def boolean_operation(ctx: Context, obj1: str, obj2: str, operation: str) -> str:
-    """Perform a boolean operation between two objects.
-
-    Args:
-        obj1: Name of the target object.
-        obj2: Name of the cutter object.
-        operation: "UNION", "DIFFERENCE", or "INTERSECT".
-    """
+    """Perform a boolean operation between two objects."""
     try:
         blender = get_blender_connection()
         result = blender.send_command("boolean_operation", {"obj1": obj1, "obj2": obj2, "operation": operation})
@@ -395,13 +343,7 @@ def boolean_operation(ctx: Context, obj1: str, obj2: str, operation: str) -> str
 
 @mcp.tool()
 def select_faces_by_normal(ctx: Context, object_name: str, normal: List[float], tolerance: float) -> str:
-    """Select faces of an object based on their normal direction.
-
-    Args:
-        object_name: Name of the mesh object.
-        normal: Normal direction as [x, y, z].
-        tolerance: Tolerance for normal matching (0 to 1).
-    """
+    """Select faces of an object based on their normal direction."""
     try:
         blender = get_blender_connection()
         result = blender.send_command("select_faces_by_normal", {"name": object_name, "normal": normal, "tolerance": tolerance})
@@ -412,12 +354,7 @@ def select_faces_by_normal(ctx: Context, object_name: str, normal: List[float], 
 
 @mcp.tool()
 def extrude_selected_faces(ctx: Context, object_name: str, distance: float) -> str:
-    """Extrude the selected faces of an object.
-
-    Args:
-        object_name: Name of the mesh object.
-        distance: Extrusion distance along face normals.
-    """
+    """Extrude the selected faces of an object."""
     try:
         blender = get_blender_connection()
         result = blender.send_command("extrude_selected_faces", {"name": object_name, "distance": distance})
@@ -434,14 +371,7 @@ def create_camera(
     rotation: List[float],
     focal_length: float
 ) -> str:
-    """Create a new camera in the scene.
-
-    Args:
-        name: Name of the camera.
-        location: Position as [x, y, z].
-        rotation: Euler rotation as [x, y, z] in radians.
-        focal_length: Camera lens focal length in mm.
-    """
+    """Create a new camera in the scene."""
     try:
         blender = get_blender_connection()
         result = blender.send_command("create_camera", {"name": name, "location": location, "rotation": rotation, "focal_length": focal_length})
@@ -452,11 +382,7 @@ def create_camera(
 
 @mcp.tool()
 def set_active_camera(ctx: Context, name: str) -> str:
-    """Set a camera as the active camera for rendering.
-
-    Args:
-        name: Name of the camera.
-    """
+    """Set a camera as the active camera for rendering."""
     try:
         blender = get_blender_connection()
         result = blender.send_command("set_active_camera", {"name": name})
@@ -467,12 +393,7 @@ def set_active_camera(ctx: Context, name: str) -> str:
 
 @mcp.tool()
 def render_scene(ctx: Context, filepath: str, resolution: List[int]) -> str:
-    """Render the scene to an image file.
-
-    Args:
-        filepath: Path to save the rendered image.
-        resolution: Resolution as [width, height].
-    """
+    """Render the scene to an image file."""
     try:
         blender = get_blender_connection()
         result = blender.send_command("render_scene", {"filepath": filepath, "resolution": resolution})
@@ -482,20 +403,41 @@ def render_scene(ctx: Context, filepath: str, resolution: List[int]) -> str:
         return f"Error: {str(e)}"
 
 @mcp.tool()
-def get_render_preview(ctx: Context, resolution: List[int] = [200, 200]) -> str:
-    """Get a low-resolution preview render of the current scene as a base64-encoded string.
-
-    Args:
-        resolution: Resolution of the preview as [width, height] (default [200, 200]).
-    Returns:
-        Base64-encoded string of the preview image.
-    """
+def get_render_preview(ctx: Context, resolution: List[int] = [200, 200]) -> Dict[str, str]:
+    """Get a preview render of the current scene, save it server-side, and return file path and base64."""
     try:
         blender = get_blender_connection()
         result = blender.send_command("get_render_preview", {"resolution": resolution})
-        return result["image_base64"]
+        base64_string = result["image_base64"]
+        
+        # Server-side rendering logic: save the image temporarily
+        preview_path = os.path.join(LOG_DIR, "render_preview.png")
+        with open(preview_path, "wb") as f:
+            f.write(base64.b64decode(base64_string))
+        logger.info(f"Preview image saved to {preview_path}")
+        
+        # Return both the file path and base64 string to the LLM
+        return {
+            "file_path": preview_path,
+            "base64_string": base64_string, 
+            "message": f"Preview rendered and saved to {preview_path}. Please describe what you see if adjustments are needed."
+        }
     except Exception as e:
         logger.error(f"Error getting render preview: {str(e)}")
+        return {"error": f"Error: {str(e)}"}
+
+@mcp.tool()
+def point_camera_at(ctx: Context, camera_name: str, target_location: List[float]) -> str:
+    """Point a camera at a specific target location in the scene."""
+    try:
+        blender = get_blender_connection()
+        result = blender.send_command("point_camera_at", {
+            "camera_name": camera_name,
+            "target_location": target_location
+        })
+        return f"Pointed {camera_name} at {target_location}"
+    except Exception as e:
+        logger.error(f"Error pointing camera: {str(e)}")
         return f"Error: {str(e)}"
 
 def main():

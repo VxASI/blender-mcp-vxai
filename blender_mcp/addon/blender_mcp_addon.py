@@ -160,7 +160,8 @@ class BlenderMCPServer:
             "create_camera": self.create_camera,
             "set_active_camera": self.set_active_camera,
             "render_scene": self.render_scene,
-            "get_render_preview": self.get_render_preview,  # New handler
+            "get_render_preview": self.get_render_preview,
+            "point_camera_at": self.point_camera_at,
         }
         handler = handlers.get(cmd_type)
         if handler:
@@ -488,6 +489,18 @@ class BlenderMCPServer:
         if os.path.exists(temp_filepath):
             os.remove(temp_filepath)
         return {"image_base64": img_data}
+
+    def point_camera_at(self, camera_name, target_location):
+        """Point a camera at a specific target location."""
+        cam = bpy.data.objects.get(camera_name)
+        if not cam or cam.type != 'CAMERA':
+            raise ValueError(f"Object '{camera_name}' is not a camera")
+        cam_loc = mathutils.Vector(cam.location)
+        target = mathutils.Vector(target_location)
+        direction = (target - cam_loc).normalized()
+        rot_quat = direction.to_track_quat('-Z', 'Y')  # -Z is camera forward, Y is up
+        cam.rotation_euler = rot_quat.to_euler()
+        return {"pointed_camera": camera_name, "target": list(target)}
 
 # UI Panel
 class BLENDERMCP_PT_Panel(bpy.types.Panel):
