@@ -188,13 +188,13 @@ class BlenderMCPServer:
                 "materials": materials,
                 "modifiers": modifiers
             })
-        lights = [{"type": light.type, "location": list(light.location), "strength": light.energy, "color": list(light.color)} for light in scene.objects if light.type == 'LIGHT']
+        # lights = [{"type": light.type, "location": list(light.location), "color": list(light.color)} for light in scene.objects if light.type == 'LIGHT']
         cameras = [{"name": cam.name, "location": list(cam.location), "rotation": list(cam.rotation_euler), "focal_length": cam.data.lens, "active": cam == scene.camera} for cam in scene.objects if cam.type == 'CAMERA']
         return {
             "name": scene.name,
             "object_count": len(scene.objects),
             "objects": objects,
-            "lights": lights,
+            "lights": [],
             "cameras": cameras,
             "frame_range": [scene.frame_start, scene.frame_end],
             "render_settings": {"resolution": [scene.render.resolution_x, scene.render.resolution_y]}
@@ -408,25 +408,51 @@ class BlenderMCPServer:
 
     def get_render_preview(self, resolution=[200, 200]):
         """Generate a low-resolution preview render and return it as base64."""
-        scene = bpy.context.scene
-        if not scene.camera:
-            raise ValueError("No active camera set")
-        original_res_x = scene.render.resolution_x
-        original_res_y = scene.render.resolution_y
-        original_filepath = scene.render.filepath
-        scene.render.resolution_x = resolution[0]
-        scene.render.resolution_y = resolution[1]
-        temp_filepath = os.path.join(LOG_DIR, "preview.png")
-        scene.render.filepath = temp_filepath
-        bpy.ops.render.render(write_still=True)
-        with open(temp_filepath, "rb") as f:
-            img_data = base64.b64encode(f.read()).decode('utf-8')
-        scene.render.resolution_x = original_res_x
-        scene.render.resolution_y = original_res_y
-        scene.render.filepath = original_filepath
-        if os.path.exists(temp_filepath):
-            os.remove(temp_filepath)
-        return {"image_base64": img_data}
+        try:
+            scene = bpy.context.scene
+            if not scene.camera:
+                return {"error": "No active camera set"}
+
+            # Store original render settings
+            original_settings = {
+                'resolution_x': scene.render.resolution_x,
+                'resolution_y': scene.render.resolution_y,
+                'filepath': scene.render.filepath,
+                'file_format': scene.render.image_settings.file_format
+            }
+
+            # Set temporary render settings
+            scene.render.resolution_x = resolution[0]
+            scene.render.resolution_y = resolution[1]
+            scene.render.image_settings.file_format = 'PNG'
+            temp_filepath = os.path.join(LOG_DIR, "preview_temp.png")
+            scene.render.filepath = temp_filepath
+
+            try:
+                # Render the scene
+                bpy.ops.render.render(write_still=True)
+
+                # Read and encode the image
+                if os.path.exists(temp_filepath):
+                    with open(temp_filepath, "rb") as f:
+                        img_data = f.read()
+                    base64_string = base64.b64encode(img_data).decode('utf-8')
+                    os.remove(temp_filepath)  # Clean up temp file
+                else:
+                    return {"error": "Failed to create render file"}
+
+            finally:
+                # Restore original render settings
+                scene.render.resolution_x = original_settings['resolution_x']
+                scene.render.resolution_y = original_settings['resolution_y']
+                scene.render.filepath = original_settings['filepath']
+                scene.render.image_settings.file_format = original_settings['file_format']
+
+            return {"image_base64": base64_string}
+
+        except Exception as e:
+            logger.error(f"Error in get_render_preview: {str(e)}", exc_info=True)
+            return {"error": str(e)}
 
     def point_camera_at(self, camera_name, target_location):
         """Point a camera at a specific target location."""

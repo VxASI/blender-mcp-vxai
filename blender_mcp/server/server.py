@@ -408,18 +408,37 @@ def get_render_preview(ctx: Context, resolution: List[int] = [200, 200]) -> Dict
     try:
         blender = get_blender_connection()
         result = blender.send_command("get_render_preview", {"resolution": resolution})
-        base64_string = result["image_base64"]
         
-        preview_path = os.path.join(LOG_DIR, "render_preview.png")
-        with open(preview_path, "wb") as f:
-            f.write(base64.b64decode(base64_string))
-        logger.info(f"Preview image saved to {preview_path}")
-        
-        return {
-            "file_path": preview_path,
-            # "base64_string": base64_string,
-            "message": f"Preview rendered and saved to {preview_path}. Please describe what you see if adjustments are needed."
-        }
+        if "error" in result:
+            logger.error(f"Error from Blender: {result['error']}")
+            return {"error": result["error"]}
+            
+        if "image_base64" not in result:
+            logger.error("No image data received from Blender")
+            return {"error": "No image data received"}
+            
+        try:
+            base64_string = result["image_base64"]
+            preview_path = os.path.join(LOG_DIR, "render_preview.png")
+            
+            # Write the image data in binary mode
+            with open(preview_path, "wb") as f:
+                try:
+                    image_data = base64.b64decode(base64_string)
+                    f.write(image_data)
+                except Exception as decode_error:
+                    logger.error(f"Failed to decode base64 data: {str(decode_error)}")
+                    return {"error": f"Failed to decode image data: {str(decode_error)}"}
+                    
+            logger.info(f"Preview image saved to {preview_path}")
+            return {
+                "file_path": preview_path,
+                "message": f"Preview rendered and saved to {preview_path}. Please describe what you see if adjustments are needed."
+            }
+        except Exception as save_error:
+            logger.error(f"Failed to save preview image: {str(save_error)}")
+            return {"error": f"Failed to save preview: {str(save_error)}"}
+            
     except Exception as e:
         logger.error(f"Error getting render preview: {str(e)}")
         return {"error": f"Error: {str(e)}"}
@@ -471,7 +490,7 @@ def create_car(
     - gun_position: Where to place guns ("roof" or "hood", default: "roof").
 
     Returns:
-    Confirmation string with the car’s name.
+    Confirmation string with the car's name.
 
     Examples:
     - Simple sedan: create_car(name="Sedan")
