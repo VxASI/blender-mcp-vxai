@@ -1,5 +1,6 @@
 # Blender MCP VXAI 
 
+Pro Tip: You can use this to ask your agent to export the 3d model directly into the project you are working on to use them in your app instantly. ![Demo](https://youtu.be/sHRI0nPan20?feature=shared)
 ## Description
 
 Blender MCP VXAI a powerful integration that allows you to control Blender using natural language through MCP Clients. This tool enables you to create, modify, and manipulate 3D models, animations, and scenes in Blender by simply describing what you want to do. It bridges the gap between AI language models and 3D creation, making Blender more accessible and efficient for both beginners and experienced users. This is a simple tool where the agent can let the AI agent create scripts for you while getting feedback and building the exact scene you want.
