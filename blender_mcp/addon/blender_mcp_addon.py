@@ -2,24 +2,21 @@ import bpy
 import json
 import logging
 import socket
-import mathutils
-import bmesh
 import os
-import base64
-from bpy.props import StringProperty, IntProperty, BoolProperty
+from bpy.props import IntProperty, BoolProperty
 
 bl_info = {
     "name": "Blender MCP",
     "author": "BlenderMCP",
-    "version": (0, 1),
+    "version": (0, 3),
     "blender": (3, 0, 0),
     "location": "View3D > Sidebar > BlenderMCP",
-    "description": "Connect Blender to external tools via MCP",
+    "description": "MCP integration for dynamic Blender scene manipulation",
     "category": "Interface",
 }
 
 # Configure logging
-LOG_DIR = "/tmp"  # Adjust this path as needed for your system
+LOG_DIR = "/tmp"  # Adjust this path as needed
 if not os.path.exists(LOG_DIR):
     os.makedirs(LOG_DIR)
 logging.basicConfig(
@@ -31,6 +28,9 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger("BlenderMCPAddon")
+
+# Global history to track actions
+_action_history = []
 
 class BlenderMCPServer:
     def __init__(self, host='localhost', port=9876):
@@ -122,42 +122,14 @@ class BlenderMCPServer:
         return 0.1  # Check every 0.1 seconds
 
     def _process_command(self, command):
-        """Process a command, supporting batch operations."""
+        """Process a command received from the MCP server."""
         cmd_type = command.get("type")
         params = command.get("params", {})
         logger.info(f"Processing command: {cmd_type}, params: {params}")
 
-        if cmd_type == "batch":
-            results = []
-            for sub_command in params.get("commands", []):
-                sub_result = self._process_single_command(sub_command)
-                results.append(sub_result)
-            return {"status": "success", "result": results}
-        return self._process_single_command(command)
-
-    def _process_single_command(self, command):
-        """Execute a single command using the appropriate handler."""
-        cmd_type = command.get("type")
-        params = command.get("params", {})
         handlers = {
-            "ping": lambda **kwargs: {"pong": True},
             "get_scene_info": self.get_scene_info,
-            "create_object": self.create_object,
-            "modify_object": self.modify_object,
-            "delete_object": self.delete_object,
-            "set_material": self.set_material,
-            "subdivide_mesh": self.subdivide_mesh,
-            "add_modifier": self.add_modifier,
-            "apply_modifier": self.apply_modifier,
-            "boolean_operation": self.boolean_operation,
-            "select_faces_by_normal": self.select_faces_by_normal,
-            "extrude_selected_faces": self.extrude_selected_faces,
-            "create_camera": self.create_camera,
-            "set_active_camera": self.set_active_camera,
-            "render_scene": self.render_scene,
-            "get_render_preview": self.get_render_preview,
-            "point_camera_at": self.point_camera_at,
-            "create_car": self.create_car  # New handler
+            "run_script": self.run_script
         }
         handler = handlers.get(cmd_type)
         if handler:
@@ -166,18 +138,17 @@ class BlenderMCPServer:
                 return {"status": "success", "result": result}
             except Exception as e:
                 logger.error(f"Error in handler: {str(e)}", exc_info=True)
-                return {"status": "error", "message": str(e), "suggestion": "Check parameters or object existence"}
+                return {"status": "error", "message": str(e), "suggestion": "Check parameters or script syntax"}
         return {"status": "error", "message": f"Unknown command: {cmd_type}"}
 
-    # Original Handlers
     def get_scene_info(self):
         """Return detailed information about the current Blender scene."""
         scene = bpy.context.scene
         objects = []
         for obj in scene.objects:
             vertex_count = len(obj.data.vertices) if obj.type == 'MESH' else None
-            materials = [mat.name for mat in obj.data.materials] if hasattr(obj.data, 'materials') else []
-            modifiers = [mod.name for mod in obj.modifiers]
+            face_count = len(obj.data.polygons) if obj.type == 'MESH' else None
+            modifiers = [mod.name for mod in obj.modifiers] if obj.modifiers else []
             objects.append({
                 "name": obj.name,
                 "type": obj.type,
@@ -185,390 +156,43 @@ class BlenderMCPServer:
                 "rotation": list(obj.rotation_euler),
                 "scale": list(obj.scale),
                 "vertex_count": vertex_count,
-                "materials": materials,
+                "face_count": face_count,
                 "modifiers": modifiers
             })
-        # lights = [{"type": light.type, "location": list(light.location), "color": list(light.color)} for light in scene.objects if light.type == 'LIGHT']
-        cameras = [{"name": cam.name, "location": list(cam.location), "rotation": list(cam.rotation_euler), "focal_length": cam.data.lens, "active": cam == scene.camera} for cam in scene.objects if cam.type == 'CAMERA']
-        return {
-            "name": scene.name,
-            "object_count": len(scene.objects),
-            "objects": objects,
-            "lights": [],
-            "cameras": cameras,
-            "frame_range": [scene.frame_start, scene.frame_end],
-            "render_settings": {"resolution": [scene.render.resolution_x, scene.render.resolution_y]}
-        }
-
-    def create_object(self, type="CUBE", name=None, location=[0, 0, 0], rotation=[0, 0, 0], scale=[1, 1, 1], relative_to=None):
-        """Create a new object, optionally positioned relative to another object."""
-        if relative_to:
-            rel_obj = bpy.data.objects.get(relative_to)
-            if not rel_obj:
-                raise ValueError(f"Object '{relative_to}' not found")
-            location = rel_obj.location + mathutils.Vector(location)
-        bpy.ops.object.select_all(action='DESELECT')
-        if type == "CUBE":
-            bpy.ops.mesh.primitive_cube_add(location=location, rotation=rotation, scale=scale)
-        elif type == "CYLINDER":
-            bpy.ops.mesh.primitive_cylinder_add(location=location, rotation=rotation, scale=scale)
-        else:
-            raise ValueError(f"Unsupported object type: {type}")
-        obj = bpy.context.active_object
-        if name:
-            obj.name = name
-        return {
-            "name": obj.name,
-            "type": obj.type,
-            "location": list(obj.location),
-            "rotation": list(obj.rotation_euler),
-            "scale": list(obj.scale)
-        }
-
-    def modify_object(self, name, location=None, rotation=None, scale=None, visible=None):
-        """Modify properties of an existing object."""
-        obj = bpy.data.objects.get(name)
-        if not obj:
-            raise ValueError(f"Object '{name}' not found")
-        if location is not None:
-            obj.location = location
-        if rotation is not None:
-            obj.rotation_euler = rotation
-        if scale is not None:
-            obj.scale = scale
-        if visible is not None:
-            obj.hide_viewport = not visible
-        return {
-            "name": obj.name,
-            "location": list(obj.location),
-            "rotation": list(obj.rotation_euler),
-            "scale": list(obj.scale),
-            "visible": obj.visible_get()
-        }
-
-    def delete_object(self, name):
-        """Delete an object from the scene."""
-        obj = bpy.data.objects.get(name)
-        if not obj:
-            raise ValueError(f"Object '{name}' not found")
-        bpy.ops.object.select_all(action='DESELECT')
-        obj.select_set(True)
-        bpy.ops.object.delete()
-        return {"deleted": name}
-
-    def set_material(self, object_name, material_name=None, color=None, material_type="DIFFUSE", **kwargs):
-        """Apply or create a material with advanced properties."""
-        obj = bpy.data.objects.get(object_name)
-        if not obj or not hasattr(obj.data, 'materials'):
-            raise ValueError(f"Invalid object: {object_name}")
-        mat_name = material_name if material_name else f"Mat_{object_name}"
-        mat = bpy.data.materials.get(mat_name) or bpy.data.materials.new(mat_name)
-        mat.use_nodes = True
-        tree = mat.node_tree
-        nodes = tree.nodes
-        nodes.clear()
-        output = nodes.new('ShaderNodeOutputMaterial')
-        if material_type == "DIFFUSE":
-            shader = nodes.new('ShaderNodeBsdfDiffuse')
-            if color:
-                shader.inputs['Color'].default_value = (*color[:3], 1.0)
-        elif material_type == "METALLIC":
-            shader = nodes.new('ShaderNodeBsdfPrincipled')
-            if color:
-                shader.inputs['Base Color'].default_value = (*color[:3], 1.0)
-            shader.inputs['Metallic'].default_value = kwargs.get('metallic', 1.0)
-            shader.inputs['Roughness'].default_value = kwargs.get('roughness', 0.1)
-        elif material_type == "GLASS":
-            shader = nodes.new('ShaderNodeBsdfGlass')
-            if color:
-                shader.inputs['Color'].default_value = (*color[:3], 1.0)
-            shader.inputs['IOR'].default_value = kwargs.get('ior', 1.5)
-        else:
-            raise ValueError(f"Unsupported material type: {material_type}")
-        tree.links.new(shader.outputs[0], output.inputs[0])
-        if not obj.data.materials:
-            obj.data.materials.append(mat)
-        else:
-            obj.data.materials[0] = mat
-        return {"material_name": mat.name}
-
-    def subdivide_mesh(self, name, cuts):
-        """Subdivide a mesh object."""
-        obj = bpy.data.objects.get(name)
-        if not obj or obj.type != 'MESH':
-            raise ValueError(f"Object '{name}' is not a mesh")
-        mesh = obj.data
-        bm = bmesh.new()
-        bm.from_mesh(mesh)
-        bmesh.ops.subdivide_edges(bm, edges=bm.edges, cuts=cuts, use_grid_fill=True)
-        bm.to_mesh(mesh)
-        bm.free()
-        mesh.update()
-        return {"subdivided": name, "cuts": cuts}
-
-    def add_modifier(self, name, modifier_type, params):
-        """Add a modifier to an object."""
-        obj = bpy.data.objects.get(name)
-        if not obj:
-            raise ValueError(f"Object '{name}' not found")
-        mod = obj.modifiers.new(name=modifier_type, type=modifier_type)
-        for key, value in params.items():
-            setattr(mod, key, value)
-        return {"added_modifier": modifier_type, "to": name}
-
-    def apply_modifier(self, name, modifier_name):
-        """Apply a modifier to an object."""
-        obj = bpy.data.objects.get(name)
-        if not obj:
-            raise ValueError(f"Object '{name}' not found")
-        mod = obj.modifiers.get(modifier_name)
-        if not mod:
-            raise ValueError(f"Modifier '{modifier_name}' not found on object '{name}'")
-        bpy.context.view_layer.objects.active = obj
-        bpy.ops.object.modifier_apply(modifier=mod.name)
-        return {"applied_modifier": modifier_name, "to": name}
-
-    def boolean_operation(self, obj1, obj2, operation):
-        """Perform a boolean operation between two objects."""
-        obj = bpy.data.objects.get(obj1)
-        cutter = bpy.data.objects.get(obj2)
-        if not obj or not cutter:
-            raise ValueError(f"Object not found: {obj1} or {obj2}")
-        mod = obj.modifiers.new(name="Boolean", type='BOOLEAN')
-        mod.operation = operation.upper()
-        mod.object = cutter
-        bpy.context.view_layer.objects.active = obj
-        bpy.ops.object.modifier_apply(modifier=mod.name)
-        return {"boolean_operation": operation, "on": obj1, "with": obj2}
-
-    def select_faces_by_normal(self, name, normal, tolerance):
-        """Select faces based on their normal direction."""
-        obj = bpy.data.objects.get(name)
-        if not obj or obj.type != 'MESH':
-            raise ValueError(f"Object '{name}' is not a mesh")
-        mesh = obj.data
-        bm = bmesh.new()
-        bm.from_mesh(mesh)
-        normal = mathutils.Vector(normal).normalized()
-        selected_faces = [face for face in bm.faces if face.normal.dot(normal) > 1 - tolerance]
-        for face in bm.faces:
-            face.select = face in selected_faces
-        bm.to_mesh(mesh)
-        bm.free()
-        mesh.update()
-        return {"selected_faces": len(selected_faces)}
-
-    def extrude_selected_faces(self, name, distance):
-        """Extrude the selected faces of an object."""
-        obj = bpy.data.objects.get(name)
-        if not obj or obj.type != 'MESH':
-            raise ValueError(f"Object '{name}' not found")
-        mesh = obj.data
-        bm = bmesh.new()
-        bm.from_mesh(mesh)
-        selected_faces = [face for face in bm.faces if face.select]
-        if not selected_faces:
-            raise ValueError("No faces selected for extrusion")
-        ret = bmesh.ops.extrude_face_region(bm, geom=selected_faces)
-        translate_verts = [v for v in ret['geom'] if isinstance(v, bmesh.types.BMVert)]
-        bmesh.ops.translate(bm, vec=(0, 0, distance), verts=translate_verts)
-        bm.to_mesh(mesh)
-        bm.free()
-        mesh.update()
-        return {"extruded": name, "distance": distance}
-
-    def create_camera(self, name, location, rotation, focal_length):
-        """Create a new camera in the scene."""
-        cam_data = bpy.data.cameras.new(name)
-        cam = bpy.data.objects.new(name, cam_data)
-        cam.location = location
-        cam.rotation_euler = rotation
-        cam_data.lens = focal_length
-        bpy.context.collection.objects.link(cam)
-        return {"created_camera": name}
-
-    def set_active_camera(self, name):
-        """Set a camera as the active camera."""
-        cam = bpy.data.objects.get(name)
-        if not cam or cam.type != 'CAMERA':
-            raise ValueError(f"Object '{name}' is not a camera")
-        bpy.context.scene.camera = cam
-        return {"set_active_camera": name}
-
-    def render_scene(self, filepath, resolution):
-        """Render the scene to an image file."""
-        scene = bpy.context.scene
-        if not scene.camera:
-            raise ValueError("No active camera set")
-        scene.render.resolution_x = resolution[0]
-        scene.render.resolution_y = resolution[1]
-        scene.render.filepath = filepath
-        bpy.ops.render.render(write_still=True)
-        return {"rendered_to": filepath}
-
-    def get_render_preview(self, resolution=[200, 200]):
-        """Generate a low-resolution preview render and return it as base64."""
-        try:
-            scene = bpy.context.scene
-            if not scene.camera:
-                return {"error": "No active camera set"}
-
-            # Store original render settings
-            original_settings = {
-                'resolution_x': scene.render.resolution_x,
-                'resolution_y': scene.render.resolution_y,
-                'filepath': scene.render.filepath,
-                'file_format': scene.render.image_settings.file_format
-            }
-
-            # Set temporary render settings
-            scene.render.resolution_x = resolution[0]
-            scene.render.resolution_y = resolution[1]
-            scene.render.image_settings.file_format = 'PNG'
-            temp_filepath = os.path.join(LOG_DIR, "preview_temp.png")
-            scene.render.filepath = temp_filepath
-
-            try:
-                # Render the scene
-                bpy.ops.render.render(write_still=True)
-
-                # Read and encode the image
-                if os.path.exists(temp_filepath):
-                    with open(temp_filepath, "rb") as f:
-                        img_data = f.read()
-                    base64_string = base64.b64encode(img_data).decode('utf-8')
-                    os.remove(temp_filepath)  # Clean up temp file
-                else:
-                    return {"error": "Failed to create render file"}
-
-            finally:
-                # Restore original render settings
-                scene.render.resolution_x = original_settings['resolution_x']
-                scene.render.resolution_y = original_settings['resolution_y']
-                scene.render.filepath = original_settings['filepath']
-                scene.render.image_settings.file_format = original_settings['file_format']
-
-            return {"image_base64": base64_string}
-
-        except Exception as e:
-            logger.error(f"Error in get_render_preview: {str(e)}", exc_info=True)
-            return {"error": str(e)}
-
-    def point_camera_at(self, camera_name, target_location):
-        """Point a camera at a specific target location."""
-        cam = bpy.data.objects.get(camera_name)
-        if not cam or cam.type != 'CAMERA':
-            raise ValueError(f"Object '{camera_name}' is not a camera")
-        cam_loc = mathutils.Vector(cam.location)
-        target = mathutils.Vector(target_location)
-        direction = (target - cam_loc).normalized()
-        rot_quat = direction.to_track_quat('-Z', 'Y')
-        cam.rotation_euler = rot_quat.to_euler()
-        return {"pointed_camera": camera_name, "target": list(target)}
-
-    # New Handler for Modular Car
-    def create_car(
-        self,
-        name="Car",
-        body_scale=[2.0, 1.0, 0.5],
-        hood_scale=[0.8, 0.9, 0.2],
-        tire_radius=0.4,
-        tire_thickness=0.2,
-        color=[0.8, 0.2, 0.2],
-        has_spoiler=False,
-        spoiler_scale=[0.1, 1.0, 0.1],
-        gun_count=0,
-        gun_type="machine_gun",
-        gun_position="roof"
-    ):
-        """Create a modular car with customizable components."""
-        bpy.ops.object.select_all(action='DESELECT')
-
-        # Create car body
-        bpy.ops.mesh.primitive_cube_add(size=1, location=(0, 0, body_scale[2] / 2))
-        car_body = bpy.context.active_object
-        car_body.name = f"{name}_Body"
-        car_body.scale = body_scale
-
-        # Create hood
-        hood_x_pos = body_scale[0] / 2 - hood_scale[0] / 2
-        bpy.ops.mesh.primitive_cube_add(size=1, location=(hood_x_pos, 0, body_scale[2] + hood_scale[2] / 2))
-        hood = bpy.context.active_object
-        hood.name = f"{name}_Hood"
-        hood.scale = hood_scale
-
-        # Create tires
-        tire_positions = [
-            (body_scale[0] / 2 - tire_radius, body_scale[1] / 2, tire_radius),
-            (body_scale[0] / 2 - tire_radius, -body_scale[1] / 2, tire_radius),
-            (-body_scale[0] / 2 + tire_radius, body_scale[1] / 2, tire_radius),
-            (-body_scale[0] / 2 + tire_radius, -body_scale[1] / 2, tire_radius)
+        cameras = [
+            {
+                "name": cam.name,
+                "location": list(cam.location),
+                "rotation": list(cam.rotation_euler)
+            } for cam in scene.objects if cam.type == 'CAMERA'
         ]
-        tires = []
-        for i, pos in enumerate(tire_positions):
-            bpy.ops.mesh.primitive_cylinder_add(radius=tire_radius, depth=tire_thickness, location=pos)
-            tire = bpy.context.active_object
-            tire.name = f"{name}_Tire_{i}"
-            tire.rotation_euler = (0, 1.5708, 0)  # Rotate to lie flat
-            tires.append(tire)
+        lights = [
+            {
+                "name": light.name,
+                "type": light.data.type,
+                "location": list(light.location),
+                "intensity": light.data.energy,
+                "color": list(light.data.color)
+            } for light in scene.objects if light.type == 'LIGHT'
+        ]
+        return {
+            "objects": objects,
+            "cameras": cameras,
+            "lights": lights,
+            "history": _action_history[-10:]  # Last 10 actions for brevity
+        }
 
-        # Add spoiler if requested
-        if has_spoiler:
-            spoiler_x_pos = -body_scale[0] / 2 - spoiler_scale[0] / 2
-            bpy.ops.mesh.primitive_cube_add(size=1, location=(spoiler_x_pos, 0, body_scale[2] + spoiler_scale[2] / 2))
-            spoiler = bpy.context.active_object
-            spoiler.name = f"{name}_Spoiler"
-            spoiler.scale = spoiler_scale
-
-        # Add guns if requested
-        guns = []
-        if gun_count > 0:
-            gun_spacing = body_scale[1] / (gun_count + 1)
-            for i in range(gun_count):
-                if gun_position == "roof":
-                    x_pos = 0
-                    y_pos = (i + 1) * gun_spacing - body_scale[1] / 2
-                    z_pos = body_scale[2] + 0.2
-                else:  # hood
-                    x_pos = hood_x_pos
-                    y_pos = (i + 1) * gun_spacing - body_scale[1] / 2
-                    z_pos = body_scale[2] + hood_scale[2] + 0.2
-                if gun_type == "machine_gun":
-                    bpy.ops.mesh.primitive_cube_add(size=1, location=(x_pos, y_pos, z_pos))
-                    gun = bpy.context.active_object
-                    gun.scale = [0.3, 0.1, 0.1]
-                else:  # cannon
-                    bpy.ops.mesh.primitive_cylinder_add(radius=0.1, depth=0.5, location=(x_pos, y_pos, z_pos))
-                    gun = bpy.context.active_object
-                    gun.rotation_euler = (0, 1.5708, 0)
-                gun.name = f"{name}_Gun_{i}"
-                guns.append(gun)
-
-        # Apply material
-        mat = bpy.data.materials.new(f"{name}_Material")
-        mat.use_nodes = True
-        nodes = mat.node_tree.nodes
-        nodes.clear()
-        output = nodes.new('ShaderNodeOutputMaterial')
-        shader = nodes.new('ShaderNodeBsdfPrincipled')
-        shader.inputs['Base Color'].default_value = (*color[:3], 1.0)
-        shader.inputs['Metallic'].default_value = 0.8
-        shader.inputs['Roughness'].default_value = 0.3
-        mat.node_tree.links.new(shader.outputs[0], output.inputs[0])
-        car_body.data.materials.append(mat)
-        hood.data.materials.append(mat)
-        if has_spoiler:
-            spoiler.data.materials.append(mat)
-
-        # Group all parts under an empty
-        bpy.ops.object.empty_add(location=(0, 0, 0))
-        car_group = bpy.context.active_object
-        car_group.name = name
-        parts = [car_body, hood] + tires + ([spoiler] if has_spoiler else []) + guns
-        for part in parts:
-            part.parent = car_group
-
-        return {"created": name}
+    def run_script(self, script: str):
+        """Execute a Python script in Blender."""
+        global _action_history
+        try:
+            # Execute the script in Blender's Python environment
+            exec(script, globals(), locals())
+            _action_history.append(f"Executed script: {script[:50]}...")
+            return {"message": "Script executed successfully"}
+        except Exception as e:
+            _action_history.append(f"Script execution failed: {str(e)}")
+            raise Exception(f"Script execution failed: {str(e)}")
 
 # UI Panel
 class BLENDERMCP_PT_Panel(bpy.types.Panel):
