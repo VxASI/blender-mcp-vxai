@@ -138,7 +138,7 @@ pip install uv
 - Check that the addon is properly installed and enabled
 - For specific errors, check the Blender console for detailed messages
 
-### For version 1.0.3 and less the command is
+### For older versions the command is
 
 **uvx --from blender-mcp-vxai start**
 
