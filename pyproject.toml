@@ -1,7 +1,7 @@
 [project]
 requires-python = ">=3.7"
 name = "blender-mcp-vxai"
-version = "1.0.2"  # Increment to a new version
+version = "1.0.3"  # Increment to a new version
 description = "MCP server for Blender integration to enable dynamic 3D scene manipulation"
 authors = [{name = "VxAI", email = "vxasi7@gmail.com"}]
 license = {text = "MIT"}
