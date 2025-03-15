@@ -8,6 +8,21 @@ Blender MCP VXAI a powerful integration that allows you to control Blender using
 ## v1.0.3 Released PLEASE REPEAT THE ADDON STEP WITH NEW ADDON FILE and get latest from uv for server. Please reach out if any issues.
 Check out release notes for more details about enhancements
 
+## Guide to using the latest version once you are setup
+Step 1: Get a basic image
+Step 2: Put it in Cursor/Cline/Windsurf or any MCP clinet
+Step 3: Put in a prompt like
+```Create this in 3d, I have given you my insane architectural plans. Make it as pretty as you can. :)```
+Step 4: Make the necessary tweaks in natural language, do it until you are happy with your world
+Step 5: Put this prompt:
+```
+Export this scene in this project in gib, then create a ThreeJS app and use this as my world. Make sure its a server so there are no issues loading the files. I want to be able to roam around this world freely. Go Wild!
+````
+Step 6. Enjoy.
+Step 7: Make it pretty.
+
+
+
 ## Features
 
 - Control Blender using natural language commands
