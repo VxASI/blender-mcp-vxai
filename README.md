@@ -9,7 +9,7 @@ Blender MCP VXAI a powerful integration that allows you to control Blender using
 Check out release notes for more details about enhancements [Demo](https://youtu.be/3e3h6rN194I?si=E7cuDKhsHK0mcRsO)
 
 
-## Guide to Using the Latest Version Once You’re Set Up
+## Guide to Using the Latest Version Once You're Set Up
 
 Follow these steps to create and explore your stunning 3D world!
 
@@ -23,14 +23,14 @@ Upload your image into **Cursor**, **Cline**, **Windsurf**, or any **MCP client*
 Enter a prompt to transform your image into something extraordinary. Try something like:
 
 ```plaintext
-Create this in 3D. I’ve given you my insane architectural plans—make it as pretty as you can! :)
+Create this in 3D. I've given you my insane architectural plans—make it as pretty as you can! :)
 ```
 
 ### Step 4: Tweak It with Natural Language
 Refine your creation by making adjustments in plain English. Keep tweaking until your world looks just right.
 
 ### Step 5: Export and Build Your Interactive World
-When you’re satisfied, use this prompt to take it to the next level:
+When you're satisfied, use this prompt to take it to the next level:
 
 ```plaintext
 Export this scene in this project in .gib format, then create a ThreeJS app and use this as my world. Set it up as a server to avoid file-loading issues. I want to roam around this world freely—go wild!
@@ -82,7 +82,7 @@ pip install uv
 1. Click "+ Add new Server"
 2. Configure with:
    - Name: `blender-mcp`
-   - Command: `uvx --from blender-mcp-vxai start`
+   - Command: `uvx blender-mcp-vxai`
 
 #### For Claude Desktop:
 1. Go to Claude > Settings > Developer > Edit Config
@@ -93,7 +93,7 @@ pip install uv
         "blender": {
             "command": "uvx",
             "args": [
-                "--from blender-mcp-vxai start"
+                "blender-mcp-vxai"
             ]
         }
     }
