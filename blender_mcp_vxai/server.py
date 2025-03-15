@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List, Optional
+import base64
 
 # Configure logging
 LOG_DIR = "/tmp"  # Adjust this path as needed
@@ -27,7 +28,7 @@ class BlenderConnection:
     host: str = "localhost"
     port: int = 9876
     sock: Optional[socket.socket] = None
-    timeout: float = 15.0
+    timeout: float = 60.0  # Increased from 15.0 for longer operations
     max_reconnect_attempts: int = 3
     base_reconnect_delay: float = 1.0
 
@@ -67,8 +68,9 @@ class BlenderConnection:
     def receive_full_response(self) -> bytes:
         """Receive a complete JSON response from Blender."""
         chunks = []
-        try:
-            while True:
+        start_time = time.time()
+        while True:
+            try:
                 chunk = self.sock.recv(8192)
                 if not chunk:
                     if not chunks:
@@ -82,19 +84,21 @@ class BlenderConnection:
                     return data
                 except json.JSONDecodeError:
                     continue
-        except socket.timeout:
-            logger.warning("Socket timeout during receive")
-            if chunks:
-                data = b''.join(chunks)
-                try:
-                    json.loads(data.decode('utf-8'))
-                    return data
-                except json.JSONDecodeError:
-                    raise Exception("Incomplete JSON response received")
-            raise Exception("No data received within timeout")
-        except Exception as e:
-            logger.error(f"Error during receive: {str(e)}")
-            raise
+            except socket.timeout:
+                elapsed = time.time() - start_time
+                logger.warning(f"Socket timeout after {elapsed:.2f} seconds")
+                if chunks:
+                    data = b''.join(chunks)
+                    try:
+                        json.loads(data.decode('utf-8'))
+                        logger.info(f"Recovered partial response ({len(data)} bytes)")
+                        return data
+                    except json.JSONDecodeError:
+                        raise Exception("Incomplete JSON response received")
+                raise Exception("No data received within timeout")
+            except Exception as e:
+                logger.error(f"Error during receive: {str(e)}")
+                raise
 
     def send_command(self, command_type: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Send a command to Blender and return the response."""
@@ -207,7 +211,9 @@ def run_script(ctx: Context, script: str) -> str:
     """
     try:
         blender = get_blender_connection()
-        result = blender.send_command("run_script", {"script": script})
+        # Encode script in base64 to prevent transmission issues
+        script_encoded = base64.b64encode(script.encode('utf-8')).decode('ascii')
+        result = blender.send_command("run_script", {"script": script_encoded})
         return f"Script executed successfully: {result.get('message', 'No message returned')}"
     except Exception as e:
         logger.error(f"Error running script: {str(e)}")

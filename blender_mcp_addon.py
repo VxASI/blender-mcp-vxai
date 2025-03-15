@@ -4,6 +4,9 @@ import logging
 import socket
 import os
 from bpy.props import IntProperty, BoolProperty
+import base64
+import math
+import random
 
 bl_info = {
     "name": "Blender MCP",
@@ -182,13 +185,31 @@ class BlenderMCPServer:
             "history": _action_history[-10:]  # Last 10 actions for brevity
         }
 
+    def get_3d_view_context(self):
+        """Get a context dictionary for a 3D view area."""
+        for area in bpy.context.screen.areas:
+            if area.type == 'VIEW_3D':
+                return {'area': area, 'region': area.regions[-1], 'space_data': area.spaces.active}
+        raise Exception("No 3D view found in the current screen")
+
     def run_script(self, script: str):
         """Execute a Python script in Blender."""
         global _action_history
         try:
-            # Execute the script in Blender's Python environment
-            exec(script, globals(), locals())
-            _action_history.append(f"Executed script: {script[:50]}...")
+            # Decode base64-encoded script
+            script_decoded = base64.b64decode(script).decode('utf-8')
+            # Get 3D view context for operators
+            context_3d = self.get_3d_view_context()
+            # Define globals with pre-imported modules
+            script_globals = {'bpy': bpy, 'math': math, 'random': random}
+            # Execute with context override if Blender version supports it
+            if bpy.app.version >= (3, 2, 0):
+                with bpy.context.temp_override(**context_3d):
+                    exec(script_decoded, script_globals, locals())
+            else:
+                exec(script_decoded, script_globals, locals())
+                logger.warning("Blender < 3.2.0: Context override unavailable, some operators may fail.")
+            _action_history.append(f"Executed script: {script_decoded[:50]}...")
             return {"message": "Script executed successfully"}
         except Exception as e:
             _action_history.append(f"Script execution failed: {str(e)}")
