@@ -1,17 +1,18 @@
 [project]
 requires-python = ">=3.7"
 name = "blender-mcp-vxai"
-version = "1.0.3"  # Increment to a new version
+version = "1.0.4"  # Updated from 1.0.3
 description = "MCP server for Blender integration to enable dynamic 3D scene manipulation"
 authors = [{name = "VxAI", email = "vxasi7@gmail.com"}]
 license = {text = "MIT"}
 readme = "README.md"
 dependencies = [
-    "mcp"
+    "mcp"  # Add version if needed, e.g., "mcp>=1.0.0"
 ]
 
 [project.scripts]
-start = "blender_mcp_vxai.server:main"  # Changed from blender-mcp-vxai to start to match the actual executable
+blender-mcp-vxai = "blender_mcp_vxai.server:main"
+start = "blender_mcp_vxai.server:main"
 
 [build-system]
 requires = ["hatchling"]
