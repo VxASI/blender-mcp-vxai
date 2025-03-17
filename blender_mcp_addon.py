@@ -3,10 +3,14 @@ import json
 import logging
 import socket
 import os
+import time
+import random
 from bpy.props import IntProperty, BoolProperty
 import base64
 import math
-import random
+import bmesh
+from mathutils import Vector, Matrix
+from typing import Dict, Any, List, Optional  # A
 
 bl_info = {
     "name": "Blender MCP",
@@ -144,53 +148,89 @@ class BlenderMCPServer:
                 return {"status": "error", "message": str(e), "suggestion": "Check parameters or script syntax"}
         return {"status": "error", "message": f"Unknown command: {cmd_type}"}
 
-    def get_scene_info(self):
-        """Return detailed information about the current Blender scene."""
+    def get_scene_info(self, filters=None, properties=None, sub_object_data=None, limit=None, offset=0, timeout=5.0):
+        """Return detailed information about the Blender scene with filtering, pagination, and timeout control."""
+        start_time = time.time()
         scene = bpy.context.scene
-        objects = []
-        for obj in scene.objects:
-            vertex_count = len(obj.data.vertices) if obj.type == 'MESH' else None
-            face_count = len(obj.data.polygons) if obj.type == 'MESH' else None
-            modifiers = [mod.name for mod in obj.modifiers] if obj.modifiers else []
-            objects.append({
-                "name": obj.name,
-                "type": obj.type,
-                "location": list(obj.location),
-                "rotation": list(obj.rotation_euler),
-                "scale": list(obj.scale),
-                "vertex_count": vertex_count,
-                "face_count": face_count,
-                "modifiers": modifiers
-            })
-        cameras = [
-            {
-                "name": cam.name,
-                "location": list(cam.location),
-                "rotation": list(cam.rotation_euler)
-            } for cam in scene.objects if cam.type == 'CAMERA'
-        ]
-        lights = [
-            {
-                "name": light.name,
-                "type": light.data.type,
-                "location": list(light.location),
-                "intensity": light.data.energy,
-                "color": list(light.data.color)
-            } for light in scene.objects if light.type == 'LIGHT'
-        ]
-        return {
-            "objects": objects,
-            "cameras": cameras,
-            "lights": lights,
-            "history": _action_history[-10:]  # Last 10 actions for brevity
-        }
+        objects = list(scene.objects)  # Convert to list for slicing
 
-    def get_3d_view_context(self):
-        """Get a context dictionary for a 3D view area."""
-        for area in bpy.context.screen.areas:
-            if area.type == 'VIEW_3D':
-                return {'area': area, 'region': area.regions[-1], 'space_data': area.spaces.active}
-        raise Exception("No 3D view found in the current screen")
+        # Apply filters
+        filters = filters or {}
+        if "type" in filters:
+            objects = [obj for obj in objects if obj.type == filters["type"]]
+        if "name_contains" in filters:
+            objects = [obj for obj in objects if filters["name_contains"] in obj.name]
+        if "spatial_bounds" in filters:
+            bounds = filters["spatial_bounds"]
+            min_bounds = bounds.get("min", [-float('inf')] * 3)
+            max_bounds = bounds.get("max", [float('inf')] * 3)
+            objects = [
+                obj for obj in objects
+                if all(min_bounds[i] <= obj.location[i] <= max_bounds[i] for i in range(3))
+            ]
+
+        # Apply pagination
+        total_count = len(objects)
+        objects = objects[offset:offset + (limit or len(objects))]
+
+        # Default properties
+        properties = properties or ["name", "type", "location"]
+        sub_object_data = sub_object_data or {}
+
+        # Prepare scene data
+        scene_data = {"objects": [], "cameras": [], "lights": [], "history": _action_history[-10:]}
+
+        for obj in objects:
+            # Check timeout
+            if time.time() - start_time > timeout:
+                return {
+                    "status": "timeout",
+                    "partial_data": scene_data,
+                    "message": "Operation timed out. Try applying more specific filters for better performance.",
+                    "total_count": total_count,
+                    "processed_count": len(scene_data["objects"]) + len(scene_data["cameras"]) + len(scene_data["lights"])
+                }
+
+            obj_data = {}
+            for prop in properties:
+                if time.time() - start_time > timeout:
+                    break  # Exit early if timeout is exceeded
+                if prop == "name":
+                    obj_data["name"] = obj.name
+                elif prop == "type":
+                    obj_data["type"] = obj.type
+                elif prop == "location":
+                    obj_data["location"] = list(obj.location)
+                elif prop == "rotation":
+                    obj_data["rotation"] = list(obj.rotation_euler)
+                elif prop == "scale":
+                    obj_data["scale"] = list(obj.scale)
+                elif prop == "vertex_count" and obj.type == "MESH":
+                    obj_data["vertex_count"] = len(obj.data.vertices)
+                elif prop == "face_count" and obj.type == "MESH":
+                    obj_data["face_count"] = len(obj.data.polygons)
+                elif prop == "vertices" and obj.type == "MESH":
+                    vertex_opts = sub_object_data.get("vertices", {})
+                    sample_rate = vertex_opts.get("sample_rate", 1.0)
+                    max_count = vertex_opts.get("max_count", float('inf'))
+                    vertices = [list(v.co) for v in obj.data.vertices]
+                    if sample_rate < 1.0:
+                        vertices = [v for i, v in enumerate(vertices) if random.random() < sample_rate]
+                    if len(vertices) > max_count:
+                        vertices = vertices[:int(max_count)]
+                    obj_data["vertices"] = vertices
+                elif prop == "modifiers":
+                    obj_data["modifiers"] = [mod.name for mod in obj.modifiers]
+
+            # Categorize objects
+            if obj.type == "CAMERA":
+                scene_data["cameras"].append(obj_data)
+            elif obj.type == "LIGHT":
+                scene_data["lights"].append(obj_data)
+            else:
+                scene_data["objects"].append(obj_data)
+
+        return scene_data
 
     def run_script(self, script: str):
         """Execute a Python script in Blender."""
@@ -198,17 +238,10 @@ class BlenderMCPServer:
         try:
             # Decode base64-encoded script
             script_decoded = base64.b64decode(script).decode('utf-8')
-            # Get 3D view context for operators
-            context_3d = self.get_3d_view_context()
             # Define globals with pre-imported modules
             script_globals = {'bpy': bpy, 'math': math, 'random': random}
-            # Execute with context override if Blender version supports it
-            if bpy.app.version >= (3, 2, 0):
-                with bpy.context.temp_override(**context_3d):
-                    exec(script_decoded, script_globals, locals())
-            else:
-                exec(script_decoded, script_globals, locals())
-                logger.warning("Blender < 3.2.0: Context override unavailable, some operators may fail.")
+            # Execute script
+            exec(script_decoded, script_globals, locals())
             _action_history.append(f"Executed script: {script_decoded[:50]}...")
             return {"message": "Script executed successfully"}
         except Exception as e:
