@@ -15,7 +15,7 @@ If you are using `uvx blender-mcp-vxai`, please ensure you are using the latest 
 - Suggestions
 - Feedback
 - Fast responses 
-[Discord](https://discord.gg/Bj7JhByPRZ)
+- [Discord](https://discord.gg/Bj7JhByPRZ)
 
 ## Overview
 
