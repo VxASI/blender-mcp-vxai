@@ -8,6 +8,8 @@ import random
 from bpy.props import IntProperty, BoolProperty
 import base64
 import math
+import bmesh
+from mathutils import Vector, Matrix
 
 bl_info = {
     "name": "Blender MCP",
@@ -133,7 +135,8 @@ class BlenderMCPServer:
 
         handlers = {
             "get_scene_info": self.get_scene_info,
-            "run_script": self.run_script
+            "run_script": self.run_script,
+            "edit_mesh": self.edit_mesh  # New handler
         }
         handler = handlers.get(cmd_type)
         if handler:
@@ -142,16 +145,15 @@ class BlenderMCPServer:
                 return {"status": "success", "result": result}
             except Exception as e:
                 logger.error(f"Error in handler: {str(e)}", exc_info=True)
-                return {"status": "error", "message": str(e), "suggestion": "Check parameters or script syntax"}
+                return {"status": "error", "message": str(e), "suggestion": "Check parameters or operation type"}
         return {"status": "error", "message": f"Unknown command: {cmd_type}"}
 
     def get_scene_info(self, filters=None, properties=None, sub_object_data=None, limit=None, offset=0, timeout=5.0):
         """Return detailed information about the Blender scene with filtering, pagination, and timeout control."""
         start_time = time.time()
         scene = bpy.context.scene
-        objects = list(scene.objects)  # Convert to list for slicing
+        objects = list(scene.objects)
 
-        # Apply filters
         filters = filters or {}
         if "type" in filters:
             objects = [obj for obj in objects if obj.type == filters["type"]]
@@ -166,24 +168,20 @@ class BlenderMCPServer:
                 if all(min_bounds[i] <= obj.location[i] <= max_bounds[i] for i in range(3))
             ]
 
-        # Apply pagination
         total_count = len(objects)
         objects = objects[offset:offset + (limit or len(objects))]
 
-        # Default properties
         properties = properties or ["name", "type", "location"]
         sub_object_data = sub_object_data or {}
 
-        # Prepare scene data
         scene_data = {"objects": [], "cameras": [], "lights": [], "history": _action_history[-10:]}
 
         for obj in objects:
-            # Check timeout
             if time.time() - start_time > timeout:
                 return {
                     "status": "timeout",
                     "partial_data": scene_data,
-                    "message": "Operation timed out. Try applying more specific filters for better performance.",
+                    "message": "Operation timed out.",
                     "total_count": total_count,
                     "processed_count": len(scene_data["objects"]) + len(scene_data["cameras"]) + len(scene_data["lights"])
                 }
@@ -191,7 +189,7 @@ class BlenderMCPServer:
             obj_data = {}
             for prop in properties:
                 if time.time() - start_time > timeout:
-                    break  # Exit early if timeout is exceeded
+                    break
                 if prop == "name":
                     obj_data["name"] = obj.name
                 elif prop == "type":
@@ -219,7 +217,6 @@ class BlenderMCPServer:
                 elif prop == "modifiers":
                     obj_data["modifiers"] = [mod.name for mod in obj.modifiers]
 
-            # Categorize objects
             if obj.type == "CAMERA":
                 scene_data["cameras"].append(obj_data)
             elif obj.type == "LIGHT":
@@ -233,17 +230,268 @@ class BlenderMCPServer:
         """Execute a Python script in Blender."""
         global _action_history
         try:
-            # Decode base64-encoded script
             script_decoded = base64.b64decode(script).decode('utf-8')
-            # Define globals with pre-imported modules
             script_globals = {'bpy': bpy, 'math': math, 'random': random}
-            # Execute script
             exec(script_decoded, script_globals, locals())
             _action_history.append(f"Executed script: {script_decoded[:50]}...")
             return {"message": "Script executed successfully"}
         except Exception as e:
             _action_history.append(f"Script execution failed: {str(e)}")
             raise Exception(f"Script execution failed: {str(e)}")
+
+    def edit_mesh(self, object_name: str, operation: str, parameters: dict) -> dict:
+        """Perform advanced mesh editing operations on the specified object."""
+        try:
+            obj = bpy.data.objects.get(object_name)
+            if not obj or obj.type != 'MESH':
+                return {"status": "error", "message": f"Object {object_name} not found or not a mesh"}
+
+            initial_vertex_count = len(obj.data.vertices)
+            bpy.context.view_layer.objects.active = obj
+            original_mode = obj.mode
+            bpy.ops.object.mode_set(mode='EDIT')
+            bm = bmesh.from_edit_mesh(obj.data)
+
+            result = {"status": "success", "message": "", "affected_vertices": 0}
+
+            if operation == "select_vertices":
+                selection_mode = parameters.get("selection_mode", "replace")
+                if selection_mode == "replace":
+                    for v in bm.verts:
+                        v.select = False
+                criteria = parameters.get("criteria", {})
+                count = 0
+
+                if "position_bounds" in criteria:
+                    bounds = criteria["position_bounds"]
+                    min_bounds = bounds.get("min", [-float('inf')] * 3)
+                    max_bounds = bounds.get("max", [float('inf')] * 3)
+                    for v in bm.verts:
+                        if all(min_bounds[i] <= v.co[i] <= max_bounds[i] for i in range(3)):
+                            v.select = selection_mode != "subtract"
+                            count += 1
+
+                elif "vertex_group" in criteria:
+                    group_name = criteria["vertex_group"]
+                    if group_name in obj.vertex_groups:
+                        group_index = obj.vertex_groups[group_name].index
+                        deform_layer = bm.verts.layers.deform.verify()
+                        for v in bm.verts:
+                            if group_index in v[deform_layer]:
+                                v.select = selection_mode != "subtract"
+                                count += 1
+                    else:
+                        return {"status": "error", "message": f"Vertex group {group_name} not found"}
+
+                elif "index_range" in criteria:
+                    start = criteria["index_range"].get("start", 0)
+                    end = criteria["index_range"].get("end", len(bm.verts)-1)
+                    for i, v in enumerate(bm.verts):
+                        if start <= i <= end:
+                            v.select = selection_mode != "subtract"
+                            count += 1
+
+                elif "face_index" in criteria:
+                    face_idx = criteria["face_index"]
+                    if 0 <= face_idx < len(bm.faces):
+                        face = bm.faces[face_idx]
+                        for v in face.verts:
+                            v.select = selection_mode != "subtract"
+                            count += 1
+
+                result["message"] = f"Selected {count} vertices"
+                result["affected_vertices"] = count
+
+            elif operation == "extrude":
+                selected_verts = [v for v in bm.verts if v.select]
+                selected_edges = [e for e in bm.edges if e.select]
+                selected_faces = [f for f in bm.faces if f.select]
+                if not (selected_verts or selected_edges or selected_faces):
+                    return {"status": "error", "message": "Nothing selected to extrude"}
+
+                direction = parameters.get("direction", "normal")
+                distance = parameters.get("distance", 1.0)
+
+                if direction == "normal":
+                    if selected_faces:
+                        extruded = bmesh.ops.extrude_face_region(bm, geom=selected_faces)
+                    elif selected_edges:
+                        extruded = bmesh.ops.extrude_edge_only(bm, edges=selected_edges)
+                    else:
+                        extruded = bmesh.ops.extrude_vert_indiv(bm, verts=selected_verts)
+                    verts_extruded = [v for v in extruded["geom"] if isinstance(v, bmesh.types.BMVert)]
+                    bmesh.ops.translate(bm, vec=Vector([0, 0, distance]), verts=verts_extruded)
+                else:
+                    vec = Vector(direction) * distance
+                    if selected_faces:
+                        extruded = bmesh.ops.extrude_face_region(bm, geom=selected_faces)
+                    elif selected_edges:
+                        extruded = bmesh.ops.extrude_edge_only(bm, edges=selected_edges)
+                    else:
+                        extruded = bmesh.ops.extrude_vert_indiv(bm, verts=selected_verts)
+                    verts_extruded = [v for v in extruded["geom"] if isinstance(v, bmesh.types.BMVert)]
+                    bmesh.ops.translate(bm, vec=vec, verts=verts_extruded)
+
+                result["message"] = f"Extruded with direction {direction} and distance {distance}"
+                result["affected_vertices"] = len(verts_extruded)
+
+            elif operation == "scale":
+                selected_verts = [v for v in bm.verts if v.select]
+                if not selected_verts:
+                    return {"status": "error", "message": "No vertices selected for scaling"}
+
+                values = parameters.get("values", [1.0, 1.0, 1.0])
+                pivot = parameters.get("pivot_point", "median")
+
+                if pivot == "median":
+                    sum_co = Vector((0, 0, 0))
+                    for v in selected_verts:
+                        sum_co += v.co
+                    pivot_co = sum_co / len(selected_verts)
+                elif pivot == "cursor":
+                    pivot_co = Vector(bpy.context.scene.cursor.location)
+                elif pivot == "center":
+                    pivot_co = obj.location
+                elif pivot == "individual":
+                    for v in selected_verts:
+                        v.co.x *= values[0]
+                        v.co.y *= values[1]
+                        v.co.z *= values[2]
+                    result["message"] = f"Scaled {len(selected_verts)} vertices individually"
+                    result["affected_vertices"] = len(selected_verts)
+                else:
+                    pivot_co = Vector(pivot)
+
+                if pivot != "individual":
+                    for v in selected_verts:
+                        delta = v.co - pivot_co
+                        delta.x *= values[0]
+                        delta.y *= values[1]
+                        delta.z *= values[2]
+                        v.co = pivot_co + delta
+                    result["message"] = f"Scaled {len(selected_verts)} vertices"
+                    result["affected_vertices"] = len(selected_verts)
+
+            elif operation == "rotate":
+                selected_verts = [v for v in bm.verts if v.select]
+                if not selected_verts:
+                    return {"status": "error", "message": "No vertices selected for rotation"}
+
+                angles = parameters.get("values", [0.0, 0.0, 0.0])  # In radians
+                pivot = parameters.get("pivot_point", "median")
+
+                if pivot == "median":
+                    sum_co = Vector((0, 0, 0))
+                    for v in selected_verts:
+                        sum_co += v.co
+                    pivot_co = sum_co / len(selected_verts)
+                elif pivot == "cursor":
+                    pivot_co = Vector(bpy.context.scene.cursor.location)
+                elif pivot == "center":
+                    pivot_co = obj.location
+                else:
+                    pivot_co = Vector(pivot)
+
+                rot_x = Matrix.Rotation(angles[0], 4, 'X')
+                rot_y = Matrix.Rotation(angles[1], 4, 'Y')
+                rot_z = Matrix.Rotation(angles[2], 4, 'Z')
+                rotation = rot_z @ rot_y @ rot_x
+
+                for v in selected_verts:
+                    delta = v.co - pivot_co
+                    delta = rotation @ delta
+                    v.co = pivot_co + delta
+
+                result["message"] = f"Rotated {len(selected_verts)} vertices"
+                result["affected_vertices"] = len(selected_verts)
+
+            elif operation == "move":
+                selected_verts = [v for v in bm.verts if v.select]
+                if not selected_verts:
+                    return {"status": "error", "message": "No vertices selected for movement"}
+
+                values = Vector(parameters.get("values", [0.0, 0.0, 0.0]))
+                bmesh.ops.translate(bm, vec=values, verts=selected_verts)
+
+                result["message"] = f"Moved {len(selected_verts)} vertices"
+                result["affected_vertices"] = len(selected_verts)
+
+            elif operation == "bevel":
+                selected_edges = [e for e in bm.edges if e.select]
+                if not selected_edges:
+                    return {"status": "error", "message": "No edges selected for beveling"}
+
+                offset = parameters.get("offset", 0.1)
+                segments = parameters.get("segments", 1)
+
+                bmesh.ops.bevel(bm, geom=selected_edges, offset=offset, segments=segments, affect='EDGES')
+
+                result["message"] = f"Beveled {len(selected_edges)} edges"
+                result["affected_vertices"] = len(bm.verts) - initial_vertex_count
+
+            elif operation == "smooth":
+                selected_verts = [v for v in bm.verts if v.select]
+                if not selected_verts:
+                    return {"status": "error", "message": "No vertices selected for smoothing"}
+
+                factor = parameters.get("factor", 0.5)
+                iterations = parameters.get("iterations", 1)
+
+                for _ in range(iterations):
+                    bmesh.ops.smooth_vert(bm, verts=selected_verts, factor=factor)
+
+                result["message"] = f"Smoothed {len(selected_verts)} vertices over {iterations} iterations"
+                result["affected_vertices"] = len(selected_verts)
+
+            elif operation == "subdivide":
+                selected_faces = [f for f in bm.faces if f.select]
+                if not selected_faces:
+                    return {"status": "error", "message": "No faces selected for subdivision"}
+
+                cuts = parameters.get("cuts", 1)
+                bmesh.ops.subdivide_edges(bm, edges=[e for e in bm.edges if e.select or any(f in selected_faces for f in e.link_faces)], cuts=cuts)
+
+                result["message"] = f"Subdivided with {cuts} cuts"
+                result["affected_vertices"] = len(bm.verts) - initial_vertex_count
+
+            elif operation == "apply_curve":
+                selected_verts = [v for v in bm.verts if v.select]
+                if not selected_verts:
+                    return {"status": "error", "message": "No vertices selected for curve deformation"}
+
+                curve_type = parameters.get("curve_type", "bezier")
+                control_points = parameters.get("control_points", [])
+                if len(control_points) < 2:
+                    return {"status": "error", "message": "At least 2 control points required"}
+
+                bpy.ops.object.mode_set(mode='OBJECT')
+                curve_data = bpy.data.curves.new('Curve', 'CURVE')
+                curve_data.dimensions = '3D'
+                spline = curve_data.splines.new(curve_type.upper())
+                spline.points.add(len(control_points) - 1)
+                for i, point in enumerate(control_points):
+                    spline.points[i].co = point + [1.0]  # Homogeneous coordinates
+                curve_obj = bpy.data.objects.new('CurveObj', curve_data)
+                bpy.context.scene.collection.objects.link(curve_obj)
+
+                mod = obj.modifiers.new(name="CurveMod", type='CURVE')
+                mod.object = curve_obj
+                bpy.context.view_layer.objects.active = obj
+                bpy.ops.object.modifier_apply(modifier="CurveMod")
+                bpy.data.objects.remove(curve_obj)
+
+                bpy.ops.object.mode_set(mode='EDIT')
+                bm = bmesh.from_edit_mesh(obj.data)
+                result["message"] = f"Applied {curve_type} curve to {len(selected_verts)} vertices"
+                result["affected_vertices"] = len(selected_verts)
+
+            bmesh.update_edit_mesh(obj.data)
+            if not parameters.get("keep_edit_mode", False):
+                bpy.ops.object.mode_set(mode=original_mode)
+
+            return result
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
 
 # UI Panel
 class BLENDERMCP_PT_Panel(bpy.types.Panel):

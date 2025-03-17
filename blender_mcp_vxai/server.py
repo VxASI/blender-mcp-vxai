@@ -28,12 +28,11 @@ class BlenderConnection:
     host: str = "localhost"
     port: int = 9876
     sock: Optional[socket.socket] = None
-    timeout: float = 60.0  # Increased from 15.0 for longer operations
+    timeout: float = 60.0
     max_reconnect_attempts: int = 3
     base_reconnect_delay: float = 1.0
 
     def connect(self) -> bool:
-        """Establish a connection to the Blender addon."""
         if self.sock:
             return True
         for attempt in range(self.max_reconnect_attempts):
@@ -56,7 +55,6 @@ class BlenderConnection:
         return False
 
     def disconnect(self):
-        """Close the connection to Blender."""
         if self.sock:
             try:
                 self.sock.close()
@@ -66,7 +64,6 @@ class BlenderConnection:
                 self.sock = None
 
     def receive_full_response(self) -> bytes:
-        """Receive a complete JSON response from Blender."""
         chunks = []
         start_time = time.time()
         while True:
@@ -101,7 +98,6 @@ class BlenderConnection:
                 raise
 
     def send_command(self, command_type: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Send a command to Blender and return the response."""
         if not self.sock and not self.connect():
             raise ConnectionError("Not connected to Blender")
         command = {"type": command_type, "params": params or {}}
@@ -119,11 +115,9 @@ class BlenderConnection:
             self.disconnect()
             raise Exception(f"Connection to Blender lost: {str(e)}")
 
-# Global connection management
 _blender_connection = None
 
 def get_blender_connection(host: str = "localhost", port: int = 9876) -> BlenderConnection:
-    """Get or create a connection to Blender."""
     global _blender_connection
     if _blender_connection is not None:
         try:
@@ -142,10 +136,9 @@ def get_blender_connection(host: str = "localhost", port: int = 9876) -> Blender
 
 @asynccontextmanager
 async def server_lifespan(server: FastMCP):
-    """Manage the server's lifecycle."""
     logger.info("BlenderMCP server starting up")
     try:
-        get_blender_connection()  # Verify connection on startup
+        get_blender_connection()
         logger.info("Successfully connected to Blender")
         yield {}
     except Exception as e:
@@ -160,14 +153,11 @@ async def server_lifespan(server: FastMCP):
             _blender_connection = None
         logger.info("BlenderMCP server shut down")
 
-# Create the MCP server
 mcp = FastMCP(
     "BlenderMCP",
     description="Blender integration for dynamic scene manipulation via MCP",
     lifespan=server_lifespan
 )
-
-### Core Tools ###
 
 @mcp.tool()
 def get_scene_info(
@@ -184,24 +174,14 @@ def get_scene_info(
 
     Parameters:
         filters (dict, optional): Filters to narrow down objects.
-            - "type": Object type (e.g., "MESH", "LIGHT", "CAMERA").
-            - "name_contains": Substring in object name.
-            - "spatial_bounds": Dict with "min" and "max" coordinates (e.g., {"min": [-1, -1, -1], "max": [1, 1, 1]}).
-        properties (list, optional): Properties to include (e.g., ["name", "location", "vertices"]).
-            - Options: "name", "type", "location", "rotation", "scale", "vertex_count", "face_count", "vertices", "modifiers".
-        sub_object_data (dict, optional): Options for sub-object data like vertices.
-            - "vertices": {"sample_rate": 0.1, "max_count": 1000} (sample 10% or cap at 1000 vertices).
-        limit (int, optional): Max number of objects to return (pagination).
-        offset (int, optional): Starting index for pagination (default: 0).
-        timeout (float, optional): Max time in seconds (default: 5.0).
+        properties (list, optional): Properties to include.
+        sub_object_data (dict, optional): Options for sub-object data.
+        limit (int, optional): Max number of objects to return.
+        offset (int, optional): Starting index for pagination.
+        timeout (float, optional): Max time in seconds.
 
     Returns:
         dict: Scene data or an error with a suggestion if timed out.
-
-    Examples:
-        - Get all meshes: {"filters": {"type": "MESH"}}
-        - Get vertices for a cube: {"filters": {"name_contains": "Cube"}, "properties": ["vertices"]}
-        - Limit to 10 objects with timeout: {"limit": 10, "timeout": 3.0}
     """
     try:
         blender = get_blender_connection()
@@ -217,10 +197,7 @@ def get_scene_info(
         return result
     except Exception as e:
         logger.error(f"Error getting scene info: {str(e)}")
-        return {
-            "error": str(e),
-            "suggestion": "Try applying more specific filters or increasing the timeout."
-        }
+        return {"error": str(e), "suggestion": "Try applying more specific filters or increasing the timeout."}
 
 @mcp.tool()
 def run_script(ctx: Context, script: str) -> str:
@@ -228,23 +205,13 @@ def run_script(ctx: Context, script: str) -> str:
     Execute a Python script in Blender to manipulate the scene.
 
     Parameters:
-        script: str
-            A string containing the Python script to execute in Blender.
-            The script should use Blender's Python API (bpy) to perform operations.
-            Example:
-                '''
-                import bpy
-                bpy.ops.mesh.primitive_cube_add(size=2, location=(0, 0, 0))
-                cube = bpy.context.object
-                cube.name = "MyCube"
-                '''
+        script (str): A Python script to execute in Blender.
 
     Returns:
-        A string confirming the script execution or an error message if it fails.
+        str: Confirmation or error message.
     """
     try:
         blender = get_blender_connection()
-        # Encode script in base64 to prevent transmission issues
         script_encoded = base64.b64encode(script.encode('utf-8')).decode('ascii')
         result = blender.send_command("run_script", {"script": script_encoded})
         return f"Script executed successfully: {result.get('message', 'No message returned')}"
@@ -252,8 +219,56 @@ def run_script(ctx: Context, script: str) -> str:
         logger.error(f"Error running script: {str(e)}")
         return f"Error: {str(e)}"
 
+@mcp.tool()
+def edit_mesh(
+    ctx: Context,
+    object_name: str,
+    operation: str,
+    parameters: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Perform advanced mesh editing operations on a specified object.
+
+    Parameters:
+        object_name (str): Name of the object to edit.
+        operation (str): Operation to perform:
+            - "select_vertices": Select vertices based on criteria.
+            - "extrude": Extrude selected elements.
+            - "scale": Scale selected elements.
+            - "rotate": Rotate selected elements.
+            - "move": Move selected elements.
+            - "bevel": Bevel selected edges.
+            - "smooth": Smooth selected vertices.
+            - "apply_curve": Apply curve deformation.
+            - "subdivide": Subdivide selected faces.
+        parameters (dict): Operation-specific parameters:
+            - "select_vertices": {"criteria": {"position_bounds", "vertex_group", "index_range", "face_index"}, "selection_mode": "replace/add/subtract", "keep_edit_mode": bool}
+            - "extrude": {"direction": [x, y, z] or "normal", "distance": float, "keep_edit_mode": bool}
+            - "scale": {"values": [x, y, z], "pivot_point": "median/cursor/center/individual/[x, y, z]", "keep_edit_mode": bool}
+            - "rotate": {"values": [x, y, z] (radians), "pivot_point": "median/cursor/center/[x, y, z]", "keep_edit_mode": bool}
+            - "move": {"values": [x, y, z], "keep_edit_mode": bool}
+            - "bevel": {"offset": float, "segments": int, "keep_edit_mode": bool}
+            - "smooth": {"factor": float, "iterations": int, "keep_edit_mode": bool}
+            - "apply_curve": {"curve_type": "bezier/nurbs", "control_points": [[x, y, z], ...], "keep_edit_mode": bool}
+            - "subdivide": {"cuts": int, "keep_edit_mode": bool}
+
+    Returns:
+        dict: Result with "status", "affected_vertices", "message".
+    """
+    try:
+        blender = get_blender_connection()
+        params = {
+            "object_name": object_name,
+            "operation": operation,
+            "parameters": parameters
+        }
+        result = blender.send_command("edit_mesh", params)
+        return result
+    except Exception as e:
+        logger.error(f"Error editing mesh: {str(e)}")
+        return {"error": str(e)}
+
 def main():
-    """Run the FastMCP server."""
     mcp.run()
 
 if __name__ == "__main__":
