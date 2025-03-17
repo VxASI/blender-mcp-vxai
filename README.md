@@ -77,12 +77,12 @@ pip install uv
 ```
 
 ### Step 2: Configure Your Environment
-
+**For the latest version just use uvx blender-mcp-vxai**
 #### For Cursor:
 1. Click "+ Add new Server"
 2. Configure with:
    - Name: `blender-mcp`
-   - Command: `uvx blender-mcp-vxai`
+   - Command: `uvx blender-mcp-vxai==1.0.5`
 
 #### For Claude Desktop:
 1. Go to Claude > Settings > Developer > Edit Config
@@ -93,7 +93,7 @@ pip install uv
         "blender": {
             "command": "uvx",
             "args": [
-                "blender-mcp-vxai"
+                "blender-mcp-vxai==1.0.5"
             ]
         }
     }
@@ -152,5 +152,3 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 See LICENSE
 
-
-CREDITS TO https://github.com/ahujasid/blender-mcp for the idea!
