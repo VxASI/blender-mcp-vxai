@@ -8,6 +8,9 @@ import random
 from bpy.props import IntProperty, BoolProperty
 import base64
 import math
+import bmesh
+from mathutils import Vector, Matrix
+from typing import Dict, Any, List, Optional  # A
 
 bl_info = {
     "name": "Blender MCP",
