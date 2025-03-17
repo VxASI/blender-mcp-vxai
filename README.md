@@ -11,11 +11,12 @@ If you are using `uvx blender-mcp-vxai`, please ensure you are using the latest 
 - To get the exact file goto https://github.com/VxASI/blender-mcp-vxai/tree/v1.0.6 (replace the version with the version you want), and download that addon file.
 
 ## Join Discord Community
+[Discord Link](https://discord.gg/Bj7JhByPRZ)
 - For questions
 - Suggestions
 - Feedback
 - Fast responses 
-- [Discord](https://discord.gg/Bj7JhByPRZ)
+
 
 ## Overview
 
