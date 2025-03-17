@@ -170,24 +170,57 @@ mcp = FastMCP(
 ### Core Tools ###
 
 @mcp.tool()
-def get_scene_info(ctx: Context) -> Dict[str, Any]:
+def get_scene_info(
+    ctx: Context,
+    filters: Dict[str, Any] = None,
+    properties: List[str] = None,
+    sub_object_data: Dict[str, Any] = None,
+    limit: int = None,
+    offset: int = 0,
+    timeout: float = 5.0
+) -> Dict[str, Any]:
     """
-    Get detailed information about the current Blender scene.
-    
+    Retrieve detailed information about the current Blender scene with advanced filtering and efficiency options.
+
+    Parameters:
+        filters (dict, optional): Filters to narrow down objects.
+            - "type": Object type (e.g., "MESH", "LIGHT", "CAMERA").
+            - "name_contains": Substring in object name.
+            - "spatial_bounds": Dict with "min" and "max" coordinates (e.g., {"min": [-1, -1, -1], "max": [1, 1, 1]}).
+        properties (list, optional): Properties to include (e.g., ["name", "location", "vertices"]).
+            - Options: "name", "type", "location", "rotation", "scale", "vertex_count", "face_count", "vertices", "modifiers".
+        sub_object_data (dict, optional): Options for sub-object data like vertices.
+            - "vertices": {"sample_rate": 0.1, "max_count": 1000} (sample 10% or cap at 1000 vertices).
+        limit (int, optional): Max number of objects to return (pagination).
+        offset (int, optional): Starting index for pagination (default: 0).
+        timeout (float, optional): Max time in seconds (default: 5.0).
+
     Returns:
-        A dictionary containing:
-        - objects: List of objects with their type, name, position, rotation, scale, vertices, faces, and modifiers.
-        - history: List of recent actions performed in the scene.
-        - cameras: List of cameras with their position and rotation.
-        - lights: List of lights with their type, position, intensity, and color.
+        dict: Scene data or an error with a suggestion if timed out.
+
+    Examples:
+        - Get all meshes: {"filters": {"type": "MESH"}}
+        - Get vertices for a cube: {"filters": {"name_contains": "Cube"}, "properties": ["vertices"]}
+        - Limit to 10 objects with timeout: {"limit": 10, "timeout": 3.0}
     """
     try:
         blender = get_blender_connection()
-        result = blender.send_command("get_scene_info")
+        params = {
+            "filters": filters or {},
+            "properties": properties or ["name", "type", "location"],
+            "sub_object_data": sub_object_data or {},
+            "limit": limit,
+            "offset": offset,
+            "timeout": timeout
+        }
+        result = blender.send_command("get_scene_info", params)
         return result
     except Exception as e:
         logger.error(f"Error getting scene info: {str(e)}")
-        return {"error": str(e)}
+        return {
+            "error": str(e),
+            "suggestion": "Try applying more specific filters or increasing the timeout."
+        }
 
 @mcp.tool()
 def run_script(ctx: Context, script: str) -> str:
