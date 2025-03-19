@@ -223,9 +223,9 @@ def get_scene_info(
         }
 
 @mcp.tool()
-def run_script(ctx: Context, script: str) -> str:
+def run_script(ctx: Context, script: str) -> Dict[str, Any]:
     """
-    Execute a Python script in Blender to manipulate the scene.
+    Execute a Python script in Blender to manipulate the scene and return detailed results.
 
     Parameters:
         script: str
@@ -237,20 +237,26 @@ def run_script(ctx: Context, script: str) -> str:
                 bpy.ops.mesh.primitive_cube_add(size=2, location=(0, 0, 0))
                 cube = bpy.context.object
                 cube.name = "MyCube"
+                print(f"Created cube at {cube.location}")
+                result = {"cube_name": cube.name}
                 '''
 
     Returns:
-        A string confirming the script execution or an error message if it fails.
+        A dictionary containing:
+            - message: Confirmation or status of execution
+            - output: Captured stdout from the script (e.g., print statements)
+            - result: Any value assigned to 'result' in the script
+            - error: Error details if execution fails
     """
     try:
         blender = get_blender_connection()
         # Encode script in base64 to prevent transmission issues
         script_encoded = base64.b64encode(script.encode('utf-8')).decode('ascii')
         result = blender.send_command("run_script", {"script": script_encoded})
-        return f"Script executed successfully: {result.get('message', 'No message returned')}"
+        return result
     except Exception as e:
         logger.error(f"Error running script: {str(e)}")
-        return f"Error: {str(e)}"
+        return {"error": str(e)}
 
 def main():
     """Run the FastMCP server."""

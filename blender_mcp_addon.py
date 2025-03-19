@@ -10,7 +10,9 @@ import base64
 import math
 import bmesh
 from mathutils import Vector, Matrix
-from typing import Dict, Any, List, Optional  # A
+from typing import Dict, Any, List, Optional
+import sys
+from io import StringIO
 
 bl_info = {
     "name": "Blender MCP",
@@ -233,20 +235,42 @@ class BlenderMCPServer:
         return scene_data
 
     def run_script(self, script: str):
-        """Execute a Python script in Blender."""
+        """Execute a Python script in Blender and capture its output."""
         global _action_history
         try:
             # Decode base64-encoded script
             script_decoded = base64.b64decode(script).decode('utf-8')
-            # Define globals with pre-imported modules
-            script_globals = {'bpy': bpy, 'math': math, 'random': random}
-            # Execute script
-            exec(script_decoded, script_globals, locals())
+            
+            # Prepare to capture output
+            old_stdout = sys.stdout
+            sys.stdout = StringIO()
+            
+            # Define a dictionary to hold script locals
+            script_locals = {}
+            
+            # Execute the script with limited globals for safety
+            exec(script_decoded, {'bpy': bpy, 'math': math, 'random': random}, script_locals)
+            
+            # Capture the output
+            output = sys.stdout.getvalue()
+            
+            # Restore original stdout
+            sys.stdout = old_stdout
+            
+            # Check if the script defined a 'result' variable
+            result = script_locals.get('result', None)
+            
             _action_history.append(f"Executed script: {script_decoded[:50]}...")
-            return {"message": "Script executed successfully"}
+            return {
+                "message": "Script executed successfully",
+                "output": output,
+                "result": result
+            }
         except Exception as e:
+            import traceback
+            error_message = traceback.format_exc()
             _action_history.append(f"Script execution failed: {str(e)}")
-            raise Exception(f"Script execution failed: {str(e)}")
+            raise Exception(f"Script execution failed: {str(e)}\n{error_message}")
 
 # UI Panel
 class BLENDERMCP_PT_Panel(bpy.types.Panel):
