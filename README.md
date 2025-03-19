@@ -7,8 +7,8 @@ Pro Tip: You can use this to ask your agent to export the 3d model directly into
 Blender MCP VXAI a powerful integration that allows you to control Blender using natural language through MCP Clients. This tool enables you to create, modify, and manipulate 3D models, animations, and scenes in Blender by simply describing what you want to do. It bridges the gap between AI language models and 3D creation, making Blender more accessible and efficient for both beginners and experienced users. This is a simple tool where the agent can let the AI agent create scripts for you while getting feedback and building the exact scene you want.
 
 **Important:**  
-If you are using `uvx blender-mcp-vxai`, please ensure you are using the latest addon file from the repository. Otherwise, make sure to use the correct version. Most setups should use version **1.0.5**, though the latest available is **1.0.6**.
-- To get the exact file goto https://github.com/VxASI/blender-mcp-vxai/tree/v1.0.6 (replace the version with the version you want), and download that addon file.
+If you are using `uvx blender-mcp-vxai`, please ensure you are using the latest addon file from the repository. Otherwise, make sure to use the correct version. Most setups should use version **1.0.5**, though the latest available is **1.0.7**.
+- To get the exact file goto https://github.com/VxASI/blender-mcp-vxai/tree/v1.0.7 (replace the version with the version you want), and download that addon file.
 
 ## Join Discord Community
 [Discord Link](https://discord.com/invite/eswMMBghWs)
