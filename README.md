@@ -26,7 +26,7 @@ Blender MCP VXAI bridges the gap between AI and 3D modeling. Whether you're a se
 - **Streamline Your Workflow:** Automate complex operations and get immediate visual feedback.
 - **Export Instantly:** Directly integrate your 3D models into your app or project.
 
-**Latest Release:** v1.0.6 
+**Latest Release:** v1.0.7
 *Note: Repeat the addon step with the new addon file and update your MCP server from `uv` if needed. Check the release notes for more details [Demo](https://youtu.be/3e3h6rN194I?si=E7cuDKhsHK0mcRsO).*
 
 ---
