@@ -99,7 +99,7 @@ For the latest version, use the command: `uvx blender-mcp-vxai` (you dont need t
 1. Click **"+ Add new Server"**.
 2. Configure with:
    - **Name:** `blender-mcp`
-   - **Command:** `uvx blender-mcp-vxai==1.0.5`
+   - **Command:** `uvx blender-mcp-vxai==1.0.7`
 
 #### For Claude Desktop:
 1. Go to **Claude > Settings > Developer > Edit Config**.
@@ -110,7 +110,7 @@ For the latest version, use the command: `uvx blender-mcp-vxai` (you dont need t
            "blender": {
                "command": "uvx",
                "args": [
-                   "blender-mcp-vxai==1.0.5"
+                   "blender-mcp-vxai==1.0.7"
                ]
            }
        }
